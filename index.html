@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SLENDER: THE 8 PAGES (8-BIT VR) - Meta Quest 3</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./assets/css/style.css?v=4" />
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+
+  <!-- Encabezado Institucional / Arcade -->
+  <header class="hero">
+    <div class="coin-blink">⚠️ REC • VHS-1994 • NO HAGAS RUIDO • CONTROLA TU BATERÍA ⚠️</div>
+    <h1>SLENDER: 8 PAGES VR</h1>
+    <p class="sub">ENCUENTRA LAS 8 NOTAS OCULTAS • SIGILO POR MICRÓFONO • AUDIO ESPACIAL 3D</p>
+  </header>
+
+  <!-- Contenedor del Escenario 3D / VR + HUD + Filtro VHS + Modales -->
+  <main id="app">
+    <!-- Capa Visual VHS / CRT Dinámica según Cordura -->
+    <div id="vhs-overlay" class="vhs-overlay">
+      <div class="vhs-rec" id="vhs-rec-text">● PLAY VHS-SP • 00:00:00</div>
+      <div class="vhs-tracking hidden" id="vhs-tracking">AUTO TRACKING</div>
+    </div>
+
+    <!-- HUD Superior con Notas, Zona, Tiempo, Batería, Stamina y Medidor de Ruido -->
+    <div id="hud-overlay" class="hud-top hidden">
+      <div class="hud-pill" id="hud-pages">NOTAS: 0 / 8</div>
+      <div class="hud-pill" id="hud-time">⏱️ 05:00</div>
+      <div class="hud-pill" id="hud-zone">ZONA: BOSQUE OSCURO</div>
+      <div class="hud-pill" id="hud-bat">🔋 BAT: 100%</div>
+      <div class="hud-pill" id="hud-stam">⚡ STAM: 100%</div>
+
+      <!-- Medidor Visual de Ruido (Decibelímetro) -->
+      <div class="noise-meter-box" id="noise-box">
+        <div class="noise-header">
+          <span id="mic-icon">🎙️ RUIDO</span>
+          <span id="noise-status">SILENCIO</span>
+        </div>
+        <div class="noise-track">
+          <div id="noise-fill" class="noise-fill"></div>
+          <div class="noise-threshold" title="Umbral de detección de Slenderman"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Visor de Nota Recogida (Pop-up clásico compacto) -->
+    <div id="page-viewer" class="page-viewer hidden">
+      <canvas id="page-preview-cv" width="145" height="180" style="width:145px !important; height:180px !important; max-width:145px !important; max-height:180px !important;"></canvas>
+      <p id="page-viewer-count">PÁGINA 1 / 8 RECOGIDA</p>
+    </div>
+
+    <!-- Menú de Inicio -->
+    <div id="start-menu" class="menu-overlay">
+      <div class="menu-box">
+        <p class="menu-tag">EDICIÓN DEFINITIVA • SUPERVIVENCIA 8-BITS VR</p>
+        <h2>¿SOBREVIVIRÁS AL BOSQUE?</h2>
+        <p class="menu-desc" id="mode-desc">
+          Sigue los senderos de piedra hacia el Cementerio, la Cabaña y el Altar.
+          Recoge pilas, administra tu resistencia y si Slenderman aparece:
+          <strong>APAGA LA LINTERNA Y MANTÉN EL MEDIDOR DE RUIDO EN VERDE</strong>.
+        </p>
+
+        <div class="records-bar">
+          <span>🏆 RÉCORD NORMAL: <strong id="rec-normal">--:--</strong></span>
+          <span>💀 RÉCORD PESADILLA: <strong id="rec-nightmare">--:--</strong></span>
+        </div>
+
+        <div class="diff-selector">
+          <button type="button" class="diff-btn active" data-diff="1">NORMAL (05:00)</button>
+          <button type="button" class="diff-btn" data-diff="1.35">💀 PESADILLA (03:00)</button>
+        </div>
+
+        <div class="menu-actions">
+          <button id="btn-start-pc" type="button" class="btn-play">▶ JUGAR (ACTIVAR MIC)</button>
+          <div id="enter"></div>
+        </div>
+        <span class="hint">[ WASD: MOVER • SHIFT: CORRER • FLECHAS ◄►: GIRAR • F: LINTERNA ]</span>
+      </div>
+    </div>
+
+    <!-- Pantalla Final de Estadísticas -->
+    <div id="end-screen" class="menu-overlay hidden">
+      <div class="menu-box">
+        <p class="menu-tag" id="end-tag">FIN DE LA PARTIDA</p>
+        <h2 id="end-title">TE ATRAPÓ...</h2>
+
+        <div class="stats-grid">
+          <div class="stat-item"><span>NOTAS ENCONTRADAS</span><strong id="st-pages">0 / 8</strong></div>
+          <div class="stat-item"><span>TIEMPO SOBREVIVIDO</span><strong id="st-time">00:00</strong></div>
+          <div class="stat-item"><span>VECES ESCUCHADO (MIC)</span><strong id="st-heard">0</strong></div>
+          <div class="stat-item"><span>DISTANCIA RECORRIDA</span><strong id="st-dist">0 m</strong></div>
+        </div>
+
+        <p class="menu-desc" id="end-record-msg" style="color:#ffec27;"></p>
+
+        <div class="menu-actions">
+          <button id="btn-retry" type="button" class="btn-play">↻ VOLVER AL MENÚ</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Tarjetas de Instrucciones e Integrantes -->
+  <section class="cards">
+    <div class="card">
+      <h2>🎙️ MECÁNICAS DE SUPERVIVENCIA Y CONTROLES</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ACCIÓN</th>
+            <th>META QUEST 3</th>
+            <th>PC</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>CAMINAR / CORRER</td>
+            <td>STICK IZQ. / GATILLO IZQ.</td>
+            <td>W A S D / SHIFT</td>
+          </tr>
+          <tr>
+            <td>GIRAR CÁMARA</td>
+            <td>STICK DERECHO</td>
+            <td>FLECHAS ◄ / ►</td>
+          </tr>
+          <tr>
+            <td>LINTERNA (BATERÍA)</td>
+            <td>GATILLO DERECHO</td>
+            <td>TECLA F</td>
+          </tr>
+          <tr>
+            <td>TOMAR NOTAS / PILAS</td>
+            <td>AGARRE (GRIP) O TOCAR</td>
+            <td>ACERCARSE Y MIRAR</td>
+          </tr>
+          <tr>
+            <td>EVADIR A SLENDERMAN</td>
+            <td>APAGAR LUZ + SILENCIO</td>
+            <td>TECLA F + NO HABLAR</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>👥 INTEGRANTES DEL EQUIPO</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>NOMBRE DEL ALUMNO</th>
+            <th>NO. CONTROL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>INTEGRANTE 1</td>
+            <td>00000000</td>
+          </tr>
+          <tr>
+            <td>INTEGRANTE 2</td>
+            <td>00000000</td>
+          </tr>
+          <tr>
+            <td>INTEGRANTE 3</td>
+            <td>00000000</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="hint" style="margin-top: 14px;">
+        ING. EN SISTEMAS COMPUTACIONALES • GRAFICACIÓN VR 3.7
+      </p>
+    </div>
+  </section>
+
+  <script type="module" src="./assets/js/main.js?v=4"></script>
+</body>
+</html>
