@@ -1,0 +1,21 @@
+# Dependencias y salidas locales
+node_modules/
+dist/
+_site/
+coverage/
+playwright-report/
+test-results/
+
+# Temporales del sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+*.bak
+*.zip
+
+# Secretos locales
+.env
+.env.*
+!.env.example
