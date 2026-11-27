@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
 
-/* ================= Configuración Slenderman: Edición Completa 8-Bits VR ================= */
+/* ================= Configuración Slenderman: Edición Completa 8-Bits VR (Optimizada) ================= */
 const MAP_R = 72;               // Límite perimetral del mapa
 const TOTAL_PAGES = 8;          // Las 8 páginas clásicas
 const WALK_SPEED = 3.3;         // Velocidad caminando
 const SPRINT_SPEED = 5.4;       // Velocidad esprintando
 const rand = (a,b)=>a+Math.random()*(b-a);
 
-// Almacenamiento seguro con respaldo en memoria por si el navegador bloquea localStorage (ej. file:// o incógnito)
+// Almacenamiento seguro con respaldo en memoria
 const memoryStorage = {};
 function storageGet(key){
   try{
@@ -64,9 +64,9 @@ function loadGameSettings(){
 }
 let gameSettings = loadGameSettings();
 const QUALITY_PRESETS = {
-  performance: { desktopPixelRatio: 1.0, xrScale: 0.72, particleCount: 90, rainCount: 140, label: 'RENDIMIENTO' },
-  balanced: { desktopPixelRatio: 1.2, xrScale: 0.82, particleCount: 150, rainCount: 220, label: 'EQUILIBRADO' },
-  quality: { desktopPixelRatio: 1.45, xrScale: 0.9, particleCount: 210, rainCount: 320, label: 'CALIDAD' }
+  performance: { desktopPixelRatio: 0.85, xrScale: 0.72, particleCount: 70, rainCount: 110, label: 'RENDIMIENTO' },
+  balanced: { desktopPixelRatio: 1.0, xrScale: 0.82, particleCount: 120, rainCount: 180, label: 'EQUILIBRADO' },
+  quality: { desktopPixelRatio: 1.25, xrScale: 0.9, particleCount: 180, rainCount: 260, label: 'CALIDAD' }
 };
 
 /* ================= Render, escena, listener 3D y rig del jugador ================= */
@@ -74,8 +74,14 @@ const app = document.getElementById('app');
 const vhsOverlay = document.getElementById('vhs-overlay');
 const vhsRecText = document.getElementById('vhs-rec-text');
 const vhsTracking = document.getElementById('vhs-tracking');
-const renderer = new THREE.WebGLRenderer({antialias:false, powerPreference:'high-performance'});
+const renderer = new THREE.WebGLRenderer({
+  antialias: false,
+  powerPreference: 'high-performance',
+  stencil: false,
+  depth: true
+});
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = false;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, QUALITY_PRESETS[gameSettings.quality].desktopPixelRatio));
 renderer.setSize(app.clientWidth, app.clientHeight);
 renderer.domElement.setAttribute('aria-label', 'Escenario tridimensional de SLENDER: THE 8 PAGES');
@@ -86,9 +92,10 @@ renderer.xr.setFramebufferScaleFactor?.(QUALITY_PRESETS[gameSettings.quality].xr
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
+scene.matrixWorldAutoUpdate = true;
 const baseFogDensity = 0.056;
 scene.fog = new THREE.FogExp2(0x020103, baseFogDensity);
-const camera = new THREE.PerspectiveCamera(70, app.clientWidth/app.clientHeight, 0.05, 160);
+const camera = new THREE.PerspectiveCamera(70, app.clientWidth/app.clientHeight, 0.05, 150);
 camera.position.y = 1.6;
 
 // Panel de pausa 3D
@@ -190,7 +197,7 @@ function getNoiseThreshold(){
   return isNightmare() ? 0.024 : 0.034;
 }
 
-/* ================= Récords Locales (Tiempo + Puntuación con respaldo seguro) ================= */
+/* ================= Récords Locales ================= */
 function formatTime(sec){
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -227,6 +234,7 @@ function pixelTex(w,h,draw,rep){
   t.colorSpace = THREE.SRGBColorSpace;
   t.magFilter = THREE.NearestFilter;
   t.minFilter = THREE.NearestFilter;
+  t.generateMipmaps = false;
   if(rep){t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep,rep);}
   return t;
 }
@@ -241,11 +249,15 @@ const grass = pixelTex(16,16,(g,w,h)=>{
     }
   }
 },44);
-const floor = new THREE.Mesh(new THREE.CircleGeometry(MAP_R + 4, 48), new THREE.MeshLambertMaterial({map:grass}));
-floor.rotation.x = -Math.PI/2; scene.add(floor);
+const floor = new THREE.Mesh(new THREE.CircleGeometry(MAP_R + 4, 36), new THREE.MeshLambertMaterial({map:grass}));
+floor.rotation.x = -Math.PI/2;
+floor.matrixAutoUpdate = false;
+floor.updateMatrix();
+scene.add(floor);
 
-const skyMat = new THREE.MeshBasicMaterial({side:THREE.BackSide, fog:false});
+const skyMat = new THREE.MeshBasicMaterial({side:THREE.BackSide, fog:false, depthWrite:false});
 function paintSky(bloodMoon){
+  if(skyMat.map) skyMat.map.dispose();
   skyMat.map = pixelTex(256,128,(g,w,h)=>{
     g.fillStyle = bloodMoon ? '#140104' : '#010102'; g.fillRect(0,0,w,h);
     for(let i=0;i<130;i++){
@@ -258,10 +270,13 @@ function paintSky(bloodMoon){
   skyMat.needsUpdate = true;
 }
 paintSky(false);
-scene.add(new THREE.Mesh(new THREE.SphereGeometry(145,16,12), skyMat));
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(142,14,10), skyMat);
+skyDome.matrixAutoUpdate = false;
+skyDome.updateMatrix();
+scene.add(skyDome);
 
 /* ================= Partículas Flotantes (Luciérnagas, Cenizas y Niebla Baja) ================= */
-const PARTICLE_COUNT = 210;
+const PARTICLE_COUNT = 180;
 let activeParticleCount = QUALITY_PRESETS[gameSettings.quality].particleCount;
 const pGeo = new THREE.BufferGeometry();
 const pPositions = new Float32Array(PARTICLE_COUNT * 3);
@@ -315,30 +330,32 @@ const pMat = new THREE.PointsMaterial({
   depthWrite: false
 });
 const floatingParticles = new THREE.Points(pGeo, pMat);
+floatingParticles.frustumCulled = false;
 scene.add(floatingParticles);
 
 function updateParticles(t, dt){
   const pos = pGeo.attributes.position.array;
   for(let i=0; i<activeParticleCount; i++){
+    const idx = i * 3;
     const s = pSeeds[i];
-    const nearAltar = Math.hypot(pos[i*3], pos[i*3+2] - 42) < 18;
-    pos[i*3]   += Math.sin(t * 0.8 + s) * 0.18 * dt;
-    pos[i*3+1] += (nearAltar ? 0.35 : Math.cos(t * 1.1 + s) * 0.14) * dt;
-    if(pos[i*3+1] > 4.2) pos[i*3+1] = 0.2;
-    pos[i*3+2] += Math.sin(t * 0.7 + s * 1.3) * 0.18 * dt;
+    pos[idx]   += Math.sin(t * 0.8 + s) * 0.18 * dt;
+    pos[idx+1] += Math.cos(t * 1.1 + s) * 0.14 * dt;
+    if(pos[idx+1] > 4.2) pos[idx+1] = 0.2;
+    else if(pos[idx+1] < 0.2) pos[idx+1] = 3.8;
+    pos[idx+2] += Math.sin(t * 0.7 + s * 1.3) * 0.18 * dt;
   }
   pGeo.attributes.position.needsUpdate = true;
 }
 
 /* ================= Lluvia Nocturna Sutil (Partículas Verticales) ================= */
-const RAIN_COUNT = 320;
+const RAIN_COUNT = 260;
 let activeRainCount = QUALITY_PRESETS[gameSettings.quality].rainCount;
 const rainGeo = new THREE.BufferGeometry();
 const rainPos = new Float32Array(RAIN_COUNT * 3);
 for(let i=0; i<RAIN_COUNT; i++){
-  rainPos[i*3]   = rand(-28, 28);
+  rainPos[i*3]   = rand(-26, 26);
   rainPos[i*3+1] = rand(0, 14);
-  rainPos[i*3+2] = rand(-28, 28);
+  rainPos[i*3+2] = rand(-26, 26);
 }
 rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
 rainGeo.setDrawRange(0, activeRainCount);
@@ -349,6 +366,7 @@ const rainTex = pixelTex(4, 16, (g)=>{
 const rainMesh = new THREE.Points(rainGeo, new THREE.PointsMaterial({
   size: 0.22, map: rainTex, transparent: true, opacity: 0.42, depthWrite: false
 }));
+rainMesh.frustumCulled = false;
 scene.add(rainMesh);
 
 function updateRain(dt){
@@ -357,14 +375,15 @@ function updateRain(dt){
   const arr = rainGeo.attributes.position.array;
   const fallSpeed = isNightmare() ? 14 : 9;
   for(let i=0; i<activeRainCount; i++){
-    arr[i*3+1] -= fallSpeed * dt;
-    if(arr[i*3+1] < 0) arr[i*3+1] = 14;
+    const idx = i * 3 + 1;
+    arr[idx] -= fallSpeed * dt;
+    if(arr[idx] < 0) arr[idx] = 14;
   }
   rainGeo.attributes.position.needsUpdate = true;
 }
 
 /* ================= Huellas de Pasos en la Tierra ================= */
-const FOOTPRINT_MAX = 60;
+const FOOTPRINT_MAX = 40;
 const footprintPool = [];
 let footprintIdx = 0;
 let stepAccum = 0;
@@ -407,9 +426,10 @@ function spawnFootprint(worldPos, headingY){
 }
 
 function updateFootprints(dt){
-  for(const fp of footprintPool){
+  for(let i=0; i<FOOTPRINT_MAX; i++){
+    const fp = footprintPool[i];
     if(fp.life > 0){
-      fp.life -= dt * 0.022;
+      fp.life -= dt * 0.028;
       if(fp.life <= 0){
         fp.life = 0;
         fp.mesh.visible = false;
@@ -450,7 +470,7 @@ fHead.position.z = -.10;
 const fLens = new THREE.Mesh(new THREE.PlaneGeometry(.052, .052), lensMat);
 fLens.position.z = -.126; fLens.rotation.y = Math.PI;
 
-const beamGeo = new THREE.ConeGeometry(1.7, 8.0, 16, 1, true);
+const beamGeo = new THREE.ConeGeometry(1.7, 8.0, 12, 1, true);
 beamGeo.translate(0, -4.0, 0);
 beamGeo.rotateX(Math.PI / 2);
 const beamMesh = new THREE.Mesh(beamGeo, beamMat);
@@ -487,9 +507,10 @@ vrPromptSprite.renderOrder = 995;
 vrPromptSprite.visible = false;
 scene.add(vrPromptSprite);
 
-/* ================= Construcción de los 4 Escenarios + Props Ambientales ================= */
+/* ================= Construcción Optimizada con InstancedMesh (Bajo Draw Calls) ================= */
 const colliders = [];
 const hidingSpots = [];
+const _dummy = new THREE.Object3D();
 
 function addHidingSpot(x, y, z, rotY){
   hidingSpots.push({pos: new THREE.Vector3(x, y, z), rotY});
@@ -498,7 +519,8 @@ function addHidingSpot(x, y, z, rotY){
 function isAreaClear(x, z, minDist=5){
   if(Math.hypot(x, z) < 7) return false;
   if(Math.hypot(x, z) > MAP_R - 4) return false;
-  for(const c of colliders){
+  for(let i=0; i<colliders.length; i++){
+    const c = colliders[i];
     if(Math.hypot(x - c.x, z - c.z) < minDist) return false;
   }
   return true;
@@ -513,53 +535,91 @@ const woodWallM = new THREE.MeshLambertMaterial({color:0x2e1d12});
 const fenceM = new THREE.MeshLambertMaterial({color:0x241710});
 const pathStoneM = new THREE.MeshLambertMaterial({color:0x2c2c34});
 
-// --- CERCO PERIMETRAL DEL MAPA (72m) ---
+// --- CERCO PERIMETRAL DEL MAPA (InstancedMesh: 2 draw calls en lugar de 168) ---
 const fencePosts = 56;
+const postInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.35, 2.4, 0.35), fenceM, fencePosts);
+const railInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 0.14, 1), fenceM, fencePosts * 2);
+
 for(let i=0; i<fencePosts; i++){
   const a1 = (i / fencePosts) * Math.PI * 2;
   const a2 = ((i + 1) / fencePosts) * Math.PI * 2;
   const x1 = Math.cos(a1) * MAP_R, z1 = Math.sin(a1) * MAP_R;
   const x2 = Math.cos(a2) * MAP_R, z2 = Math.sin(a2) * MAP_R;
 
-  const post = new THREE.Mesh(new THREE.BoxGeometry(0.35, 2.4, 0.35), fenceM);
-  post.position.set(x1, 1.2, z1);
-  scene.add(post);
+  _dummy.position.set(x1, 1.2, z1);
+  _dummy.rotation.set(0, 0, 0);
+  _dummy.scale.set(1, 1, 1);
+  _dummy.updateMatrix();
+  postInst.setMatrixAt(i, _dummy.matrix);
 
   const midX = (x1 + x2) / 2, midZ = (z1 + z2) / 2;
   const len = Math.hypot(x2 - x1, z2 - z1);
-  const rail1 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, len), fenceM);
-  rail1.position.set(midX, 1.7, midZ);
-  rail1.lookAt(x2, 1.7, z2);
-  const rail2 = rail1.clone();
-  rail2.position.y = 0.9;
-  scene.add(rail1, rail2);
+  _dummy.position.set(midX, 1.7, midZ);
+  _dummy.lookAt(x2, 1.7, z2);
+  _dummy.scale.set(1, 1, len);
+  _dummy.updateMatrix();
+  railInst.setMatrixAt(i * 2, _dummy.matrix);
+
+  _dummy.position.y = 0.9;
+  _dummy.updateMatrix();
+  railInst.setMatrixAt(i * 2 + 1, _dummy.matrix);
 }
+scene.add(postInst, railInst);
 
 // --- ESCENARIO 1: EL CEMENTERIO ANTIGUO (Noreste) ---
 const cemCenter = {x: 34, z: -34};
+const tombTransforms = [];
+const crossVTransforms = [];
+const crossHTransforms = [];
+
 for(let gx = -15; gx <= 15; gx += 5){
   for(let gz = -15; gz <= 15; gz += 5){
     const x = cemCenter.x + gx + rand(-0.8,0.8);
     const z = cemCenter.z + gz + rand(-0.8,0.8);
     if(Math.random() < 0.65){
-      const tomb = new THREE.Mesh(new THREE.BoxGeometry(.85, 1.35, .28), stoneM);
-      tomb.position.set(x, .67, z);
-      scene.add(tomb);
+      tombTransforms.push({x, y: 0.67, z});
       colliders.push({x, z, r:.6});
       const side = Math.random() < 0.5 ? 1 : -1;
       addHidingSpot(x, 0.85, z + side * 0.16, side === 1 ? 0 : Math.PI);
     } else {
-      const cross = new THREE.Group();
-      const v = new THREE.Mesh(new THREE.BoxGeometry(.18, 1.7, .18), crossM); v.position.y = .85;
-      const h = new THREE.Mesh(new THREE.BoxGeometry(.9, .18, .18), crossM); h.position.y = 1.25;
-      cross.add(v,h); cross.position.set(x,0,z);
-      scene.add(cross);
+      crossVTransforms.push({x, y: 0.85, z});
+      crossHTransforms.push({x, y: 1.25, z});
       colliders.push({x, z, r:.45});
     }
   }
 }
+
+if(tombTransforms.length){
+  const tombInst = new THREE.InstancedMesh(new THREE.BoxGeometry(.85, 1.35, .28), stoneM, tombTransforms.length);
+  tombTransforms.forEach((p, idx)=>{
+    _dummy.position.set(p.x, p.y, p.z);
+    _dummy.rotation.set(0, 0, 0);
+    _dummy.scale.set(1, 1, 1);
+    _dummy.updateMatrix();
+    tombInst.setMatrixAt(idx, _dummy.matrix);
+  });
+  scene.add(tombInst);
+}
+if(crossVTransforms.length){
+  const cVInst = new THREE.InstancedMesh(new THREE.BoxGeometry(.18, 1.7, .18), crossM, crossVTransforms.length);
+  const cHInst = new THREE.InstancedMesh(new THREE.BoxGeometry(.9, .18, .18), crossM, crossHTransforms.length);
+  crossVTransforms.forEach((p, idx)=>{
+    _dummy.position.set(p.x, p.y, p.z);
+    _dummy.rotation.set(0, 0, 0);
+    _dummy.scale.set(1, 1, 1);
+    _dummy.updateMatrix();
+    cVInst.setMatrixAt(idx, _dummy.matrix);
+    _dummy.position.y = crossHTransforms[idx].y;
+    _dummy.updateMatrix();
+    cHInst.setMatrixAt(idx, _dummy.matrix);
+  });
+  scene.add(cVInst, cHInst);
+}
+
 const mausoleum = new THREE.Mesh(new THREE.BoxGeometry(4.2, 3.2, 4.2), darkStoneM);
 mausoleum.position.set(cemCenter.x, 1.6, cemCenter.z);
+mausoleum.matrixAutoUpdate = false;
+mausoleum.updateMatrix();
 scene.add(mausoleum);
 colliders.push({x: cemCenter.x, z: cemCenter.z, r: 2.6});
 addHidingSpot(cemCenter.x, 1.4, cemCenter.z + 2.13, 0);
@@ -578,6 +638,8 @@ walls.forEach(w=>{
   const wx = ruinCenter.x + w.x, wz = ruinCenter.z + w.z;
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w.w, w.h, w.d), woodWallM);
   mesh.position.set(wx, w.h/2, wz);
+  mesh.matrixAutoUpdate = false;
+  mesh.updateMatrix();
   scene.add(mesh);
   const steps = Math.ceil(Math.max(w.w, w.d));
   for(let s=0; s<steps; s++){
@@ -590,7 +652,6 @@ addHidingSpot(ruinCenter.x - 4.65, 1.4, ruinCenter.z - 2, Math.PI/2);
 addHidingSpot(ruinCenter.x + 2, 1.35, ruinCenter.z - 4.65, 0);
 addHidingSpot(ruinCenter.x - 2, 1.35, ruinCenter.z + 4.65, Math.PI);
 
-// Radio vieja dentro de la cabaña
 const oldRadio = new THREE.Group();
 const radioBox = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.24, 0.22), new THREE.MeshLambertMaterial({color:0x1b1b22}));
 const radioLed = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.02), new THREE.MeshBasicMaterial({color:0xff1e38}));
@@ -613,18 +674,23 @@ const runeTex = pixelTex(16, 48, (g,w,h)=>{
   g.fillRect(3, 34, 10, 2);
 });
 const runeMat = new THREE.MeshBasicMaterial({map:runeTex});
+const monoGeo = new THREE.BoxGeometry(1.3, 4.2, 1.3);
+const runeGeo = new THREE.PlaneGeometry(0.45, 2.4);
 
 for(let i=0; i<8; i++){
   const ang = (i / 8) * Math.PI * 2;
   const mx = ritualCenter.x + Math.cos(ang) * 9.5;
   const mz = ritualCenter.z + Math.sin(ang) * 9.5;
-  const mono = new THREE.Mesh(new THREE.BoxGeometry(1.3, 4.2, 1.3), darkStoneM);
+  const mono = new THREE.Mesh(monoGeo, darkStoneM);
   mono.position.set(mx, 2.1, mz);
   mono.lookAt(ritualCenter.x, 2.1, ritualCenter.z);
 
-  const runeStrip = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 2.4), runeMat);
+  const runeStrip = new THREE.Mesh(runeGeo, runeMat);
   runeStrip.position.z = 0.66;
   mono.add(runeStrip);
+  mono.updateMatrixWorld(true);
+  mono.matrixAutoUpdate = false;
+  runeStrip.matrixAutoUpdate = false;
 
   scene.add(mono);
   colliders.push({x: mx, z: mz, r: 0.95});
@@ -636,41 +702,65 @@ for(let i=0; i<8; i++){
 }
 const altar = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 1.4), stoneM);
 altar.position.set(ritualCenter.x, 0.55, ritualCenter.z);
+altar.matrixAutoUpdate = false;
+altar.updateMatrix();
 const altarOrb = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.32), new THREE.MeshBasicMaterial({color:0xff001e}));
 altarOrb.position.set(ritualCenter.x, 1.35, ritualCenter.z);
 scene.add(altar, altarOrb);
 colliders.push({x: ritualCenter.x, z: ritualCenter.z, r: 1.3});
 
-// --- SENDEROS DE PIEDRA Y POSTES GUÍA HACIA LOS 3 ESCENARIOS ---
+// --- SENDEROS DE PIEDRA Y POSTES GUÍA (InstancedMesh) ---
 const pathCoords = [];
+const lampPostsData = [];
 [cemCenter, ruinCenter, ritualCenter].forEach(dest=>{
   const steps = 16;
   for(let s=2; s<steps; s++){
     const t = s / steps;
     const px = dest.x * t + rand(-0.6, 0.6);
     const pz = dest.z * t + rand(-0.6, 0.6);
-    pathCoords.push({x: px, z: pz});
-
-    const stepStone = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.05, 0.9), pathStoneM);
-    stepStone.position.set(px, 0.025, pz);
-    stepStone.rotation.y = rand(0, Math.PI);
-    scene.add(stepStone);
+    pathCoords.push({x: px, z: pz, rot: rand(0, Math.PI)});
 
     if(s % 5 === 0){
       const lx = px + 1.4, lz = pz + 1.4;
-      const pole = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.3, 0.16), fenceM);
-      pole.position.set(lx, 1.15, lz);
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.34, 0.28), new THREE.MeshBasicMaterial({color:0x4a1218}));
-      lamp.position.set(lx, 2.35, lz);
-      scene.add(pole, lamp);
+      lampPostsData.push({x: lx, z: lz});
       colliders.push({x: lx, z: lz, r: 0.3});
     }
   }
 });
 
-// --- ESCENARIO 4: BOSQUE PROFUNDO + BANDADAS DE MURCIÉLAGOS VOXEL ---
+const pathInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.9, 0.05, 0.9), pathStoneM, pathCoords.length);
+pathCoords.forEach((p, idx)=>{
+  _dummy.position.set(p.x, 0.025, p.z);
+  _dummy.rotation.set(0, p.rot, 0);
+  _dummy.scale.set(1, 1, 1);
+  _dummy.updateMatrix();
+  pathInst.setMatrixAt(idx, _dummy.matrix);
+});
+scene.add(pathInst);
+
+if(lampPostsData.length){
+  const lPoleInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 2.3, 0.16), fenceM, lampPostsData.length);
+  const lHeadInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.28, 0.34, 0.28), new THREE.MeshBasicMaterial({color:0x4a1218}), lampPostsData.length);
+  lampPostsData.forEach((p, idx)=>{
+    _dummy.position.set(p.x, 1.15, p.z);
+    _dummy.rotation.set(0, 0, 0);
+    _dummy.scale.set(1, 1, 1);
+    _dummy.updateMatrix();
+    lPoleInst.setMatrixAt(idx, _dummy.matrix);
+    _dummy.position.y = 2.35;
+    _dummy.updateMatrix();
+    lHeadInst.setMatrixAt(idx, _dummy.matrix);
+  });
+  scene.add(lPoleInst, lHeadInst);
+}
+
+// --- ESCENARIO 4: BOSQUE PROFUNDO CON INSTANCEDMESH (3 draw calls para 135 árboles) ---
 const bats = [];
 const batMat = new THREE.MeshBasicMaterial({color:0x08080c});
+const treeTrunks = [];
+const treeCanopies1 = [];
+const treeCanopies2 = [];
+const treeBranches = [];
 
 for(let i=0; i<135; i++){
   let x, z, tries = 0;
@@ -684,23 +774,16 @@ for(let i=0; i<135; i++){
   if(tries >= 25) continue;
 
   const s = rand(1.0, 1.8);
-  const t = new THREE.Group();
   const trunkW = 0.65 * s;
-  const tr = new THREE.Mesh(new THREE.BoxGeometry(trunkW, 3.8*s, trunkW), trunkM);
-  tr.position.y = 1.9*s;
-  t.add(tr);
+  treeTrunks.push({x, z, s});
 
   if(i % 2 === 0){
-    const c1 = new THREE.Mesh(new THREE.BoxGeometry(2.3*s, 1.3*s, 2.3*s), deadLeafM); c1.position.y = 3.7*s;
-    const c2 = new THREE.Mesh(new THREE.BoxGeometry(1.4*s, 1.0*s, 1.4*s), deadLeafM); c2.position.y = 4.6*s;
-    t.add(c1,c2);
+    treeCanopies1.push({x, z, s});
+    treeCanopies2.push({x, z, s});
   } else {
-    const b1 = new THREE.Mesh(new THREE.BoxGeometry(1.6*s, .16*s, .16*s), trunkM);
-    b1.position.set(.45*s, 2.8*s, 0); b1.rotation.z = .4;
-    t.add(b1);
+    treeBranches.push({x, z, s});
   }
-  t.position.set(x, 0, z);
-  scene.add(t);
+
   colliders.push({x, z, r: trunkW * 0.65});
 
   if(Math.hypot(x, z) > 15 && i % 3 === 0){
@@ -719,17 +802,57 @@ for(let i=0; i<135; i++){
     const wR   = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.02, 0.12), batMat); wR.position.x =  0.16;
     batGrp.add(body, wL, wR);
     batGrp.position.set(x, 3.2, z);
+    batGrp.visible = false;
     scene.add(batGrp);
     bats.push({grp: batGrp, wL, wR, home: new THREE.Vector3(x, 3.2, z), flying: false, flyTimer: 0, dir: new THREE.Vector3()});
   }
 }
 
+const trunkInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.65, 3.8, 0.65), trunkM, treeTrunks.length);
+treeTrunks.forEach((tr, idx)=>{
+  _dummy.position.set(tr.x, 1.9 * tr.s, tr.z);
+  _dummy.rotation.set(0, 0, 0);
+  _dummy.scale.set(tr.s, tr.s, tr.s);
+  _dummy.updateMatrix();
+  trunkInst.setMatrixAt(idx, _dummy.matrix);
+});
+scene.add(trunkInst);
+
+if(treeCanopies1.length){
+  const c1Inst = new THREE.InstancedMesh(new THREE.BoxGeometry(2.3, 1.3, 2.3), deadLeafM, treeCanopies1.length);
+  const c2Inst = new THREE.InstancedMesh(new THREE.BoxGeometry(1.4, 1.0, 1.4), deadLeafM, treeCanopies2.length);
+  treeCanopies1.forEach((c, idx)=>{
+    _dummy.position.set(c.x, 3.7 * c.s, c.z);
+    _dummy.rotation.set(0, 0, 0);
+    _dummy.scale.set(c.s, c.s, c.s);
+    _dummy.updateMatrix();
+    c1Inst.setMatrixAt(idx, _dummy.matrix);
+
+    _dummy.position.set(c.x, 4.6 * c.s, c.z);
+    _dummy.updateMatrix();
+    c2Inst.setMatrixAt(idx, _dummy.matrix);
+  });
+  scene.add(c1Inst, c2Inst);
+}
+
+if(treeBranches.length){
+  const bInst = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 0.16, 0.16), trunkM, treeBranches.length);
+  treeBranches.forEach((b, idx)=>{
+    _dummy.position.set(b.x + 0.45 * b.s, 2.8 * b.s, b.z);
+    _dummy.rotation.set(0, 0, 0.4);
+    _dummy.scale.set(b.s, b.s, b.s);
+    _dummy.updateMatrix();
+    bInst.setMatrixAt(idx, _dummy.matrix);
+  });
+  scene.add(bInst);
+}
+
 function updateBats(t, dt){
   camera.getWorldPosition(head);
-  for(const b of bats){
+  for(let i=0; i<bats.length; i++){
+    const b = bats[i];
     if(!b.flying){
-      b.grp.visible = false;
-      if(b.home.distanceTo(head) < 7.5 && playing && !paused){
+      if(playing && !paused && b.home.distanceToSquared(head) < 56.25){
         b.flying = true;
         b.flyTimer = 3.2;
         b.grp.visible = true;
@@ -754,21 +877,25 @@ function updateBats(t, dt){
 // Ojos rojos acechando en la oscuridad
 const shadowEyes = [];
 const redEyeMat = new THREE.MeshBasicMaterial({color:0xff001e});
-for(let i=0;i<14;i++){
+const eyeGeo = new THREE.BoxGeometry(.07,.05,.05);
+for(let i=0;i<12;i++){
   const grp = new THREE.Group();
-  const e1 = new THREE.Mesh(new THREE.BoxGeometry(.07,.05,.05), redEyeMat); e1.position.x = -.11;
-  const e2 = new THREE.Mesh(new THREE.BoxGeometry(.07,.05,.05), redEyeMat); e2.position.x =  .11;
+  const e1 = new THREE.Mesh(eyeGeo, redEyeMat); e1.position.x = -.11;
+  const e2 = new THREE.Mesh(eyeGeo, redEyeMat); e2.position.x =  .11;
   grp.add(e1,e2);
   grp.position.set(rand(-50,50), rand(1.1,2.2), rand(-50,50));
   scene.add(grp);
   shadowEyes.push(grp);
 }
 
-/* ================= Pilas 3D en el Mapa (10 en Normal, solo 5 en Pesadilla) ================= */
+/* ================= Pilas 3D en el Mapa ================= */
 const batteries = [];
 const batBodyMat = new THREE.MeshLambertMaterial({color:0x111116});
 const batTopMat  = new THREE.MeshLambertMaterial({color:0x00e436, emissive:0x00330c});
 const batTipMat  = new THREE.MeshLambertMaterial({color:0xffec27});
+const batGeo1 = new THREE.BoxGeometry(0.14, 0.16, 0.14);
+const batGeo2 = new THREE.BoxGeometry(0.14, 0.10, 0.14);
+const batGeo3 = new THREE.BoxGeometry(0.06, 0.04, 0.06);
 
 function spawnBatteries(){
   batteries.forEach(b=>scene.remove(b.m)); batteries.length = 0;
@@ -788,9 +915,9 @@ function spawnBatteries(){
       bx = Math.cos(a) * r; bz = Math.sin(a) * r;
     }
     const grp = new THREE.Group();
-    const b1 = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.16, 0.14), batBodyMat);
-    const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.10, 0.14), batTopMat); b2.position.y = 0.13;
-    const b3 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.06), batTipMat); b3.position.y = 0.20;
+    const b1 = new THREE.Mesh(batGeo1, batBodyMat);
+    const b2 = new THREE.Mesh(batGeo2, batTopMat); b2.position.y = 0.13;
+    const b3 = new THREE.Mesh(batGeo3, batTipMat); b3.position.y = 0.20;
     grp.add(b1, b2, b3);
     grp.position.set(bx, 0.25, bz);
     scene.add(grp);
@@ -939,6 +1066,8 @@ function spawnPages(){
     const m = new THREE.Mesh(pageGeo, mat);
     m.position.copy(spot.pos);
     m.rotation.y = spot.rotY;
+    m.matrixAutoUpdate = false;
+    m.updateMatrix();
     scene.add(m);
     pages.push({m, txt});
   }
@@ -989,62 +1118,72 @@ let forestEventTimer = 16;
 let ambientGlitchTimer = 0;
 let ambientApparitionTimer = 0;
 
-/* ================= SCREAMER ORIGINAL + FILTRO VHS EN VR ================= */
-const screamCv = document.createElement('canvas'); screamCv.width = 128; screamCv.height = 128;
-const screamTex = new THREE.CanvasTexture(screamCv);
-screamTex.magFilter = THREE.NearestFilter;
-const screamPlane = new THREE.Mesh(
-  new THREE.PlaneGeometry(1.55, 1.55),
-  new THREE.MeshBasicMaterial({map:screamTex, transparent:true, opacity:0, depthTest:false, fog:false})
-);
+/* ================= SCREAMER ORIGINAL OPTIMIZADO (Texturas Pre-Cacheadas) ================= */
+function buildStaticTextures(count, isJumpscare){
+  const list = [];
+  for(let f=0; f<count; f++){
+    list.push(pixelTex(96, 96, (g)=>{
+      for(let i=0;i<240;i++){
+        const shade = Math.random() > 0.5 ? 245 : 15;
+        g.fillStyle = `rgba(${shade},${shade},${shade},0.75)`;
+        g.fillRect(Math.floor(Math.random()*48)*2, Math.floor(Math.random()*48)*2, 2, 2);
+      }
+      g.fillStyle = 'rgba(255,0,40,0.22)';
+      g.fillRect(0, Math.floor(Math.random()*90), 96, 2);
+      g.fillStyle = 'rgba(0,235,255,0.22)';
+      g.fillRect(0, Math.floor(Math.random()*90), 96, 2);
+
+      if(isJumpscare){
+        const jx = rand(-6,6), jy = rand(-5,5);
+        g.fillStyle = '#050507';
+        g.fillRect(8+jx, 70+jy, 80, 30);
+        g.fillStyle = '#e8e8e8';
+        g.fillRect(40+jx, 70+jy, 16, 26);
+        g.fillStyle = '#111115';
+        g.fillRect(46+jx, 72+jy, 4, 24);
+
+        g.fillStyle = '#dcdcdc';
+        g.fillRect(26+jx, 10+jy, 44, 62);
+        g.fillStyle = '#f7f7f7';
+        g.fillRect(29+jx, 13+jy, 38, 56);
+        g.fillStyle = '#bdbdbd';
+        g.fillRect(27+jx, 32+jy, 4, 26);
+        g.fillRect(65+jx, 32+jy, 4, 26);
+        g.fillRect(35+jx, 64+jy, 26, 6);
+      }
+    }));
+  }
+  return list;
+}
+
+const staticTexturesNormal = buildStaticTextures(4, false);
+const staticTexturesJumpscare = buildStaticTextures(4, true);
+let staticFrameIdx = 0;
+let staticSwapTimer = 0;
+
+const screamMat = new THREE.MeshBasicMaterial({
+  map: staticTexturesNormal[0],
+  transparent: true,
+  opacity: 0,
+  depthTest: false,
+  fog: false
+});
+const screamPlane = new THREE.Mesh(new THREE.PlaneGeometry(1.55, 1.55), screamMat);
 screamPlane.position.set(0, 0, -0.45);
 screamPlane.renderOrder = 999;
 camera.add(screamPlane);
 
-function drawOriginalSlenderScreamer(intensity, isJumpscare){
-  const g = screamCv.getContext('2d');
-  g.clearRect(0,0,128,128);
-
-  const dots = Math.floor(intensity * 560);
-  for(let i=0;i<dots;i++){
-    const shade = Math.random() > 0.5 ? 245 : 15;
-    g.fillStyle = `rgba(${shade},${shade},${shade},${intensity*0.85})`;
-    g.fillRect(Math.floor(Math.random()*64)*2, Math.floor(Math.random()*64)*2, 2, 2);
+function updateScreamerPlane(dt, intensity, isJumpscare){
+  staticSwapTimer -= dt;
+  if(staticSwapTimer <= 0){
+    staticFrameIdx = (staticFrameIdx + 1) & 3;
+    screamMat.map = isJumpscare ? staticTexturesJumpscare[staticFrameIdx] : staticTexturesNormal[staticFrameIdx];
+    staticSwapTimer = 0.055; // ~18 FPS estilo cinta VHS sin sobrecargar GPU
   }
-
-  if(intensity > 0.12){
-    g.fillStyle = `rgba(255,0,40,${intensity*0.25})`;
-    g.fillRect(0, Math.floor(Math.random()*120), 128, 3);
-    g.fillStyle = `rgba(0,235,255,${intensity*0.25})`;
-    g.fillRect(0, Math.floor(Math.random()*120), 128, 2);
-  }
-
-  if(isJumpscare){
-    const jx = rand(-9,9), jy = rand(-7,7);
-    g.fillStyle = '#050507';
-    g.fillRect(10+jx, 94+jy, 108, 40);
-    g.fillStyle = '#e8e8e8';
-    g.fillRect(54+jx, 94+jy, 20, 34);
-    g.fillStyle = '#111115';
-    g.fillRect(61+jx, 96+jy, 6, 32);
-
-    g.fillStyle = '#dcdcdc';
-    g.fillRect(34+jx, 14+jy, 60, 82);
-    g.fillStyle = '#f7f7f7';
-    g.fillRect(38+jx, 18+jy, 52, 74);
-    g.fillStyle = '#bdbdbd';
-    g.fillRect(36+jx, 42+jy, 6, 36);
-    g.fillRect(86+jx, 42+jy, 6, 36);
-    g.fillRect(46+jx, 86+jy, 36, 8);
-
-    for(let k=0;k<10;k++){
-      g.fillStyle = k%2===0 ? 'rgba(0,0,0,0.65)' : 'rgba(255,255,255,0.75)';
-      g.fillRect(rand(20,90), rand(10,115), rand(16,45), 2);
-    }
-  }
-  screamTex.needsUpdate = true;
+  screamMat.opacity = isJumpscare ? 0.98 : intensity * 0.65;
 }
 
+let lastVhsSecond = -1;
 function updateVhsEffect(staticLevel){
   const sanityDistortion = Math.max(0, (65 - sanity) / 65);
   const baseNightmareVhs = isNightmare() ? 0.22 : 0;
@@ -1059,10 +1198,13 @@ function updateVhsEffect(staticLevel){
   else if(vhsTracking) vhsTracking.textContent = 'AUTO TRACKING';
 
   const elapsed = Math.max(0, Math.floor(roundStartTime - timeLeft));
-  const hh = String(Math.floor(elapsed / 3600)).padStart(2,'0');
-  const mm = String(Math.floor((elapsed % 3600) / 60)).padStart(2,'0');
-  const ss = String(elapsed % 60).padStart(2,'0');
-  vhsRecText.textContent = `● PLAY VHS-SP • ${hh}:${mm}:${ss}`;
+  if(elapsed !== lastVhsSecond){
+    lastVhsSecond = elapsed;
+    const hh = String(Math.floor(elapsed / 3600)).padStart(2,'0');
+    const mm = String(Math.floor((elapsed % 3600) / 60)).padStart(2,'0');
+    const ss = String(elapsed % 60).padStart(2,'0');
+    vhsRecText.textContent = `● PLAY VHS-SP • ${hh}:${mm}:${ss}`;
+  }
 }
 
 /* ================= HUD Muñeca Izquierda (VR) + HUD Pantalla ================= */
@@ -1090,7 +1232,8 @@ function getNearestPageSignal(){
 
   let nearest = Infinity;
   let nearestPage = null;
-  for(const page of pages){
+  for(let i=0; i<pages.length; i++){
+    const page = pages[i];
     const distance = Math.hypot(page.m.position.x - playerPosition.x, page.m.position.z - playerPosition.z);
     if(distance < nearest){
       nearest = distance;
@@ -1130,6 +1273,7 @@ function updatePageSignalUI(){
 const panelCv = document.createElement('canvas'); panelCv.width = 320; panelCv.height = 192;
 const panelTex = new THREE.CanvasTexture(panelCv);
 panelTex.magFilter = THREE.NearestFilter;
+panelTex.generateMipmaps = false;
 
 function drawPanel(msg){
   hudPagesEl.textContent = `NOTAS: ${pagesFound} / ${TOTAL_PAGES}`;
@@ -1141,6 +1285,8 @@ function drawPanel(msg){
   hudTimeEl.classList.toggle('low', timeLeft <= 45);
   hudBatEl.classList.toggle('low', battery <= 25);
   hudStamEl.classList.toggle('low', exhausted || stamina <= 25);
+
+  if(!renderer.xr.isPresenting && !msg) return;
 
   const g = panelCv.getContext('2d');
   g.fillStyle='#030305'; g.fillRect(0,0,320,192);
@@ -1201,7 +1347,7 @@ function drawPanel(msg){
 const panel = new THREE.Mesh(new THREE.PlaneGeometry(.19,.115), new THREE.MeshBasicMaterial({map:panelTex}));
 panel.position.set(0,.075,.02); panel.rotation.x = -Math.PI/3;
 
-/* ================= Micrófono con supresión de ruido y calibración de silencio ================= */
+/* ================= Micrófono ================= */
 async function initMicrophone(){
   if(!gameSettings.microphone || micReady || !navigator.mediaDevices?.getUserMedia) return;
   try{
@@ -1220,7 +1366,7 @@ async function initMicrophone(){
     highPass.frequency.value = 105;
     highPass.Q.value = 0.7;
     micAnalyser = micContext.createAnalyser();
-    micAnalyser.fftSize = 512;
+    micAnalyser.fftSize = 256;
     micAnalyser.smoothingTimeConstant = 0.55;
     micData = new Uint8Array(micAnalyser.fftSize);
     src.connect(highPass).connect(micAnalyser);
@@ -1459,7 +1605,6 @@ const settingsStatusElement = document.getElementById('settings-status');
 renderer.domElement.addEventListener('webglcontextlost',(event)=>{
   event.preventDefault();
   if(settingsStatusElement) settingsStatusElement.textContent = 'SE PERDIÓ EL CONTEXTO GRÁFICO. ESPERA A QUE EL NAVEGADOR LO RESTAURE.';
-  console.warn('WebGL: se perdió temporalmente el contexto gráfico.');
 });
 renderer.domElement.addEventListener('webglcontextrestored',()=>{
   applyGraphicsQuality();
@@ -1481,7 +1626,7 @@ function applyGraphicsQuality(){
   rainGeo.attributes.position.needsUpdate = true;
   if(!renderer.xr.isPresenting) renderer.xr.setFramebufferScaleFactor?.(preset.xrScale);
   resizeRendererToApp();
-  if(settingsStatusElement) settingsStatusElement.textContent = `PERFIL ${preset.label} APLICADO · ${activeParticleCount} PARTÍCULAS / ${activeRainCount} GOTAS. EN VR SE PRIORIZA LA ESTABILIDAD.`;
+  if(settingsStatusElement) settingsStatusElement.textContent = `PERFIL ${preset.label} APLICADO · ${activeParticleCount} PARTÍCULAS / ${activeRainCount} GOTAS.`;
 }
 
 function renderGameSettings(){
@@ -1509,7 +1654,7 @@ microphoneToggle?.addEventListener('change', async ()=>{
     if(settingsStatusElement) settingsStatusElement.textContent = 'DETECCIÓN POR MICRÓFONO ACTIVADA.';
   }else{
     stopMicrophone();
-    if(settingsStatusElement) settingsStatusElement.textContent = 'DETECCIÓN POR MICRÓFONO DESACTIVADA. EL JUEGO SIGUE FUNCIONANDO.';
+    if(settingsStatusElement) settingsStatusElement.textContent = 'DETECCIÓN POR MICRÓFONO DESACTIVADA.';
   }
 });
 renderGameSettings();
@@ -1853,10 +1998,12 @@ function getExpeditionRank(won){
 function calculateExpeditionScore(won, elapsed){
   const pagePoints = pagesFound * 120;
   const escapeBonus = won ? 320 : 0;
-  const nightmareBonus = isNightmare() ? 180 : 0;
-  const timeBonus = Math.max(0, Math.round(timeLeft * 1.8));
-  const sanityBonus = Math.max(0, Math.round(sanity * 1.25));
-  const batteryBonus = Math.max(0, Math.round(battery * 0.35));
+  const nightmareBonus = (won && isNightmare()) ? 180 : 0;
+  const timeBonus = won
+    ? Math.max(0, Math.round(timeLeft * 1.8))
+    : Math.min(90, Math.round(elapsed * 0.3));
+  const sanityBonus = won ? Math.max(0, Math.round(sanity * 1.25)) : 0;
+  const batteryBonus = won ? Math.max(0, Math.round(battery * 0.35)) : 0;
   const noisePenalty = timesHeard * 22;
   const travelBonus = Math.round(distanceWalked * 0.18);
   return Math.max(0, Math.round(pagePoints + escapeBonus + nightmareBonus + timeBonus + sanityBonus + batteryBonus + travelBonus - noisePenalty));
@@ -1951,6 +2098,7 @@ function resetGame(){
   hideFirstEncounter();
   flashFailTimer = 0; stealthTimer = 0; invertControlsTimer = 0; breathTimer = 0;
   forestEventTimer = rand(15,22) / diffMultiplier; ambientGlitchTimer = 0; ambientApparitionTimer = 0;
+  lastVhsSecond = -1;
   resetPageCollectionUI();
 
   scene.fog.density = nightmare ? 0.072 : baseFogDensity;
@@ -1960,7 +2108,7 @@ function resetGame(){
   clearFootprints();
   updateVhsEffect(0);
   phantomSlender.visible = false;
-  screamPlane.material.opacity = 0;
+  screamMat.opacity = 0;
   spawnPages();
   spawnBatteries();
   updatePageSignalUI();
@@ -2040,7 +2188,7 @@ function initAudio(){
     whispGain.gain.setTargetAtTime(danger * 0.035, ac.currentTime, 0.22);
     whispOscA.frequency.setTargetAtTime(112 + Math.random() * 9, ac.currentTime, 0.3);
     whispOscB.frequency.setTargetAtTime(118 + Math.random() * 8, ac.currentTime, 0.3);
-  }, 180);
+  }, 240);
 
   const radioPosAudio = new THREE.PositionalAudio(audioListener);
   const radOscA = audioListener.context.createOscillator();
@@ -2171,7 +2319,8 @@ function initAudio(){
 
       camera.getWorldPosition(head);
       camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-      for(const p of pages){
+      for(let i=0; i<pages.length; i++){
+        const p = pages[i];
         const pDist = Math.hypot(p.m.position.x - head.x, p.m.position.z - head.z);
         if(pDist < 5.0 && step % 3 === 0){
           const dx = (p.m.position.x - head.x) / (pDist || 1);
@@ -2357,6 +2506,7 @@ const tmp = new THREE.Vector3(), head = new THREE.Vector3(), fwd = new THREE.Vec
 const moveStep = new THREE.Vector3();
 const toSlenderVector = new THREE.Vector3();
 const phantomDirection = new THREE.Vector3();
+const _itemDir = new THREE.Vector3();
 const UP = new THREE.Vector3(0,1,0);
 const ctrls = [];
 let vrSprintPressed = false;
@@ -2602,8 +2752,12 @@ function move(dt){
   stepAccum += stepLen;
 
   camera.getWorldPosition(head);
-  for(const c of colliders){
-    const dx = head.x-c.x, dz = head.z-c.z, d = Math.hypot(dx,dz), min = c.r+.35;
+  for(let i=0; i<colliders.length; i++){
+    const c = colliders[i];
+    const dx = head.x-c.x, dz = head.z-c.z;
+    const min = c.r+.35;
+    if(Math.abs(dx) > min || Math.abs(dz) > min) continue;
+    const d = Math.hypot(dx,dz);
     if(d<min && d>0.001){ dolly.position.x += dx/d*(min-d); dolly.position.z += dz/d*(min-d); }
   }
 
@@ -2632,7 +2786,7 @@ function move(dt){
   }
 }
 
-/* ================= Lógica de Pilas, Páginas Ocultas y Dificultad ================= */
+/* ================= Lógica de Pilas, Páginas Ocultas y Dificultad (Sin Asignaciones) ================= */
 function updateItems(t){
   camera.getWorldPosition(head);
   camera.getWorldDirection(fwd);
@@ -2642,25 +2796,30 @@ function updateItems(t){
   let promptTarget = null;
   let promptOffset = 0.35;
 
-  // 1. Pilas para recargar la batería de la linterna (distancia horizontal X/Z)
   for(let i=batteries.length-1; i>=0; i--){
     const b = batteries[i];
     b.m.rotation.y = t * 2.2 + b.phase;
     b.m.position.y = 0.25 + Math.sin(t * 3 + b.phase) * 0.05;
 
-    const horizDist = Math.hypot(b.m.position.x - head.x, b.m.position.z - head.z);
-    const batteryToPlayer = b.m.position.clone().sub(head).normalize();
-    const lookingAtBattery = horizDist < 1.85 && fwd.dot(batteryToPlayer) > 0.15;
+    const dx = b.m.position.x - head.x;
+    const dz = b.m.position.z - head.z;
+    const horizDist = Math.hypot(dx, dz);
+    if(horizDist > 2.5) continue;
+
+    _itemDir.subVectors(b.m.position, head).normalize();
+    const lookingAtBattery = horizDist < 1.85 && fwd.dot(_itemDir) > 0.15;
 
     let handNearBattery = false;
     let handAction = false;
-    for(const c of ctrls){
-      c.getWorldPosition(tmp);
-      const near = tmp.distanceTo(b.m.position) < 1.15;
-      if(near){
-        handNearBattery = true;
-        if(c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed){
-          handAction = true;
+    if(inVR){
+      for(let k=0; k<ctrls.length; k++){
+        const c = ctrls[k];
+        c.getWorldPosition(tmp);
+        if(tmp.distanceToSquared(b.m.position) < 1.3225){
+          handNearBattery = true;
+          if(c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed){
+            handAction = true;
+          }
         }
       }
     }
@@ -2684,23 +2843,28 @@ function updateItems(t){
     }
   }
 
-  // 2. Las 8 Páginas Ocultas
   for(let i=pages.length-1;i>=0;i--){
     const p = pages[i];
-    const toPage = p.m.position.clone().sub(head).normalize();
+    const dx = p.m.position.x - head.x;
+    const dz = p.m.position.z - head.z;
+    const horizDist = Math.hypot(dx, dz);
+    if(horizDist > 2.5) continue;
+
+    _itemDir.subVectors(p.m.position, head).normalize();
     const dist = p.m.position.distanceTo(head);
-    const horizDist = Math.hypot(p.m.position.x - head.x, p.m.position.z - head.z);
-    const lookingAtPage = horizDist < 1.75 && fwd.dot(toPage) > 0.35;
+    const lookingAtPage = horizDist < 1.75 && fwd.dot(_itemDir) > 0.35;
 
     let handNearPage = false;
     let handAction = false;
-    for(const c of ctrls){
-      c.getWorldPosition(tmp);
-      const handDist = tmp.distanceTo(p.m.position);
-      if(handDist < 0.95){
-        handNearPage = true;
-        if(c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed){
-          handAction = true;
+    if(inVR){
+      for(let k=0; k<ctrls.length; k++){
+        const c = ctrls[k];
+        c.getWorldPosition(tmp);
+        if(tmp.distanceToSquared(p.m.position) < 0.9025){
+          handNearPage = true;
+          if(c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed){
+            handAction = true;
+          }
         }
       }
     }
@@ -2710,7 +2874,7 @@ function updateItems(t){
       promptOffset = 0.36;
     }
 
-    let got = !inVR && dist < 1.45 && fwd.dot(toPage) > 0.40;
+    let got = !inVR && dist < 1.45 && fwd.dot(_itemDir) > 0.40;
     if(inVR && ((lookingAtPage && anyConfirmPressed) || (handNearPage && handAction))){
       got = true;
     }
@@ -2875,9 +3039,9 @@ function updateSlender(dt, t){
   }
 
   slender.lookAt(head.x, 0, head.z);
-  tentacles.forEach((tn, idx)=>{
-    tn.rotation.z = (idx%2===0?1:-1)*(.4 + idx*.1) + Math.sin(t*(4+pagesFound) + idx)*.16;
-  });
+  for(let idx=0; idx<tentacles.length; idx++){
+    tentacles[idx].rotation.z = (idx%2===0?1:-1)*(.4 + idx*.1) + Math.sin(t*(4+pagesFound) + idx)*.16;
+  }
 
   let speedFactor = 1.0;
   if(isHidden) speedFactor = 0.25;
@@ -2948,19 +3112,16 @@ function updateSlender(dt, t){
 
   if(screamerTimer > 0){
     screamerTimer -= dt;
-    screamPlane.material.opacity = 0.98;
-    drawOriginalSlenderScreamer(1, true);
+    updateScreamerPlane(dt, 1, true);
   } else if(combinedStatic > 0.05){
-    screamPlane.material.opacity = combinedStatic * 0.65;
-    drawOriginalSlenderScreamer(combinedStatic, false);
+    updateScreamerPlane(dt, combinedStatic, false);
   } else {
-    screamPlane.material.opacity = 0;
+    screamMat.opacity = 0;
   }
 
   if(sanity <= 0){
     sfx('lose');
-    screamPlane.material.opacity = 0.98;
-    drawOriginalSlenderScreamer(1, true);
+    updateScreamerPlane(dt, 1, true);
     drawPanel('TE ATRAPO...');
     finishGame(false, 'SLENDERMAN TE ATRAPÓ');
   }
@@ -2969,9 +3130,16 @@ function updateSlender(dt, t){
 /* ================= Bucle principal ================= */
 const clock = new THREE.Clock();
 let panelRefreshTimer = 0;
+let micRefreshTimer = 0;
 renderer.setAnimationLoop(()=>{
   const dt = Math.min(clock.getDelta(),.05), t = clock.elapsedTime;
-  if(!paused) updateMicrophone();
+  if(!paused){
+    micRefreshTimer -= dt;
+    if(micRefreshTimer <= 0){
+      updateMicrophone();
+      micRefreshTimer = 0.06;
+    }
+  }
   updateControllerButtons();
   updateParticles(t, dt);
   updateRain(dt);
@@ -3001,7 +3169,7 @@ renderer.setAnimationLoop(()=>{
     if(panelRefreshTimer <= 0){
       drawPanel();
       updatePageSignalUI();
-      panelRefreshTimer = 0.12;
+      panelRefreshTimer = 0.16;
     }
     if(timeLeft<=0){
       sfx('lose'); drawPanel('FIN DEL TIEMPO');
@@ -3056,14 +3224,15 @@ renderer.setAnimationLoop(()=>{
   }
 
   camera.getWorldPosition(head);
-  shadowEyes.forEach(e=>{
+  for(let i=0; i<shadowEyes.length; i++){
+    const e = shadowEyes[i];
     e.lookAt(head.x, e.position.y, head.z);
-    if(e.position.distanceTo(head) < 7){
+    if(e.position.distanceToSquared(head) < 49){
       const a = rand(0, Math.PI * 2);
       const r = rand((pagesFound >= 6 || isNightmare()) ? 8 : 14, MAP_R - 4);
       e.position.set(Math.cos(a) * r, rand(1.1, 2.2), Math.sin(a) * r);
     }
-  });
+  }
 
   renderer.render(scene,camera);
 });
