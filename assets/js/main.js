@@ -535,7 +535,7 @@ const woodWallM = new THREE.MeshLambertMaterial({color:0x2e1d12});
 const fenceM = new THREE.MeshLambertMaterial({color:0x241710});
 const pathStoneM = new THREE.MeshLambertMaterial({color:0x2c2c34});
 
-// --- CERCO PERIMETRAL DEL MAPA (InstancedMesh: 2 draw calls en lugar de 168) ---
+// --- CERCO PERIMETRAL DEL MAPA (InstancedMesh) ---
 const fencePosts = 56;
 const postInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.35, 2.4, 0.35), fenceM, fencePosts);
 const railInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 0.14, 1), fenceM, fencePosts * 2);
@@ -754,7 +754,7 @@ if(lampPostsData.length){
   scene.add(lPoleInst, lHeadInst);
 }
 
-// --- ESCENARIO 4: BOSQUE PROFUNDO CON INSTANCEDMESH (3 draw calls para 135 árboles) ---
+// --- ESCENARIO 4: BOSQUE PROFUNDO CON INSTANCEDMESH ---
 const bats = [];
 const batMat = new THREE.MeshBasicMaterial({color:0x08080c});
 const treeTrunks = [];
@@ -1178,7 +1178,7 @@ function updateScreamerPlane(dt, intensity, isJumpscare){
   if(staticSwapTimer <= 0){
     staticFrameIdx = (staticFrameIdx + 1) & 3;
     screamMat.map = isJumpscare ? staticTexturesJumpscare[staticFrameIdx] : staticTexturesNormal[staticFrameIdx];
-    staticSwapTimer = 0.055; // ~18 FPS estilo cinta VHS sin sobrecargar GPU
+    staticSwapTimer = 0.055;
   }
   screamMat.opacity = isJumpscare ? 0.98 : intensity * 0.65;
 }
@@ -1487,6 +1487,7 @@ function clearIntroTimers(){
 function resetCinematicIntro(){
   clearIntroTimers();
   introSequenceActive = false;
+  setMenuMusicActive(false);
   cinematicIntro?.classList.remove('is-hidden', 'is-closing');
   cinematicIntro?.setAttribute('aria-hidden', 'false');
   introPlayButton.disabled = false;
@@ -1514,6 +1515,8 @@ function finishCinematicIntro(){
     cinematicIntro.classList.remove('is-closing');
     loadRecords();
     startMenu.classList.remove('hidden');
+    initAudio();
+    setMenuMusicActive(true);
     introPlayButton.disabled = false;
     introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
     btnStartPc.focus({preventScroll:true});
@@ -1549,6 +1552,7 @@ function startCinematicIntro(){
   if(introSequenceActive) return;
   clearIntroTimers();
   introSequenceActive = true;
+  setMenuMusicActive(false);
   introPlayButton.disabled = true;
   introPlayButton.textContent = 'TRANSMISIÓN EN CURSO...';
   try{
@@ -1568,6 +1572,8 @@ function skipCinematicIntro(){
   cinematicIntro.setAttribute('aria-hidden', 'true');
   loadRecords();
   startMenu.classList.remove('hidden');
+  initAudio();
+  setMenuMusicActive(true);
   introPlayButton.disabled = false;
   introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
   btnStartPc.focus({preventScroll:true});
@@ -1577,6 +1583,7 @@ introPlayButton?.addEventListener('click', startCinematicIntro);
 introSkipButton?.addEventListener('click', skipCinematicIntro);
 introReplayButton?.addEventListener('click', ()=>{
   startMenu.classList.add('hidden');
+  setMenuMusicActive(false);
   resetCinematicIntro();
 });
 const pauseScreen = document.getElementById('pause-screen');
@@ -1689,6 +1696,8 @@ function applyAudioMix(){
 
 for(const [key, slider] of Object.entries(audioSliderElements)){
   slider?.addEventListener('input', ()=>{
+    initAudio();
+    setMenuMusicActive(true);
     audioPrefs[key] = Number(slider.value);
     if(audioValueElements[key]) audioValueElements[key].value = `${audioPrefs[key]}%`;
     saveAudioPrefs();
@@ -1697,6 +1706,8 @@ for(const [key, slider] of Object.entries(audioSliderElements)){
   });
 }
 audioMuteButton?.addEventListener('click', ()=>{
+  initAudio();
+  setMenuMusicActive(true);
   audioPrefs.muted = !audioPrefs.muted;
   renderAudioPrefs();
   saveAudioPrefs();
@@ -1854,6 +1865,7 @@ function restartFromPause(){
   resetGame();
   playing = true;
   paused = false;
+  setMenuMusicActive(false);
   hidePauseUI();
   startMenu.classList.add('hidden');
   endScreen.classList.add('hidden');
@@ -1877,6 +1889,7 @@ function returnToMainMenuFromPause(){
   hudOverlay.classList.add('hidden');
   endScreen.classList.add('hidden');
   startMenu.classList.remove('hidden');
+  setMenuMusicActive(true);
 }
 
 function activatePauseSelection(){
@@ -1892,6 +1905,7 @@ function restartFromGameOver(){
   resetGame();
   playing = true;
   paused = false;
+  setMenuMusicActive(false);
   hidePauseUI();
   startMenu.classList.add('hidden');
   endScreen.classList.add('hidden');
@@ -1909,6 +1923,7 @@ function exitGameOverToMenu(){
     loadRecords();
     startMenu.classList.remove('hidden');
     endScreen.classList.add('hidden');
+    setMenuMusicActive(true);
   }
 }
 
@@ -1936,6 +1951,8 @@ pauseOptionButtons.forEach(button=>{
 
 diffBtns.forEach(btn=>{
   btn.addEventListener('click', ()=>{
+    initAudio();
+    setMenuMusicActive(true);
     diffBtns.forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     diffMultiplier = parseFloat(btn.dataset.diff);
@@ -1958,11 +1975,13 @@ function startGameFromMenu(){
   startMenu.classList.add('hidden');
   endScreen.classList.add('hidden');
   hudOverlay.classList.remove('hidden');
+  setMenuMusicActive(false);
 }
 
 btnStartPc.addEventListener('click', startGameFromMenu);
 audioPreviewButton?.addEventListener('click', async ()=>{
   initAudio();
+  setMenuMusicActive(true);
   if(ac?.state === 'suspended') await ac.resume();
   musicTone(146.83, 1.05, 'triangle', 0.075, -0.15);
   musicTone(174.61, 1.25, 'sine', 0.045, 0.12, 0.32);
@@ -1985,6 +2004,7 @@ btnRetry.addEventListener('click', ()=>{
   endScreen.classList.add('hidden');
   hudOverlay.classList.add('hidden');
   startMenu.classList.remove('hidden');
+  setMenuMusicActive(true);
 });
 
 function getExpeditionRank(won){
@@ -2014,6 +2034,7 @@ function finishGame(won, reasonText){
   gameOverActive = true;
   paused = true;
   playing = false;
+  setMenuMusicActive(false);
   hidePauseUI();
   hideFirstEncounter();
   vrPromptSprite.visible = false;
@@ -2121,6 +2142,90 @@ resetGame();
 /* ================= Audio Terror, Música por Capas y Audio Espacial 3D ================= */
 let ac, master, musicBus, ambienceBus, effectsBus, noiseBuffer, slenderPosAudio, whisperPosAudio, flashBuzzGain;
 
+// Efectos de sonido y música cargados desde ./assets/audio/
+const customSfx = { trueno: null, lluvia: null, musica: null, pasos: null, screamer: null };
+let rainLoopSource = null;
+let musicLoopSource = null;
+let menuMusicGain = null;
+let lastStepSfxTime = 0;
+
+function isMainMenuVisible(){
+  return Boolean(
+    startMenu &&
+    !startMenu.classList.contains('hidden') &&
+    !playing &&
+    !gameOverActive &&
+    !introSequenceActive &&
+    !renderer.xr.isPresenting
+  );
+}
+
+function setMenuMusicActive(active){
+  if(!ac || !menuMusicGain) return;
+  const shouldPlay = active && isMainMenuVisible();
+  const now = ac.currentTime;
+  menuMusicGain.gain.cancelScheduledValues(now);
+  menuMusicGain.gain.setTargetAtTime(shouldPlay ? 0.55 : 0.0, now, 0.2);
+}
+
+async function loadCustomAudioBuffers(){
+  if(!ac) return;
+  const files = {
+    trueno:   './assets/audio/trueno.mp3',
+    lluvia:   './assets/audio/lluvia.mp3',
+    musica:   './assets/audio/musica.mp3',
+    pasos:    './assets/audio/pasos.mp3',
+    screamer: './assets/audio/screamer.mp3'
+  };
+  await Promise.all(Object.entries(files).map(async ([key, url])=>{
+    try{
+      const res = await fetch(url);
+      if(!res.ok) return;
+      const arr = await res.arrayBuffer();
+      customSfx[key] = await ac.decodeAudioData(arr);
+    }catch(err){
+      console.warn(`No se pudo cargar ${url}, usando sonido sintetizado de respaldo.`);
+    }
+  }));
+  startAudioLoops();
+}
+
+function startAudioLoops(){
+  if(!ac) return;
+  if(customSfx.lluvia && !rainLoopSource){
+    rainLoopSource = ac.createBufferSource();
+    rainLoopSource.buffer = customSfx.lluvia;
+    rainLoopSource.loop = true;
+    const rainGain = ac.createGain();
+    rainGain.gain.value = 0.52;
+    rainLoopSource.connect(rainGain).connect(ambienceBus);
+    rainLoopSource.start();
+  }
+  if(customSfx.musica && !musicLoopSource){
+    musicLoopSource = ac.createBufferSource();
+    musicLoopSource.buffer = customSfx.musica;
+    musicLoopSource.loop = true;
+    menuMusicGain = ac.createGain();
+    menuMusicGain.gain.value = isMainMenuVisible() ? 0.55 : 0.0;
+    musicLoopSource.connect(menuMusicGain).connect(musicBus);
+    musicLoopSource.start();
+  }
+}
+
+function playCustomBuffer(buffer, bus, volume=0.8, playbackRate=1.0, offset=0, duration=null){
+  if(!ac || !buffer) return false;
+  if(ac.state === 'suspended') ac.resume();
+  const src = ac.createBufferSource();
+  src.buffer = buffer;
+  src.playbackRate.value = playbackRate;
+  const g = ac.createGain();
+  g.gain.value = volume;
+  src.connect(g).connect(bus || effectsBus);
+  if(duration !== null) src.start(0, offset, duration);
+  else src.start(0, offset);
+  return true;
+}
+
 function initAudio(){
   if(ac){
     if(ac.state === 'suspended') ac.resume();
@@ -2138,6 +2243,7 @@ function initAudio(){
   ambienceBus.connect(master);
   effectsBus.connect(master);
   applyAudioMix();
+  loadCustomAudioBuffers();
 
   const bufSize = ac.sampleRate * 2;
   noiseBuffer = ac.createBuffer(1, bufSize, ac.sampleRate);
@@ -2393,7 +2499,12 @@ function musicTone(frequency, duration, type='sine', volume=0.04, panValue=0, wh
 }
 
 function playOriginalSlenderScreamerSound(){
-  if(!ac || !noiseBuffer) return;
+  if(!ac) return;
+  if(customSfx.screamer){
+    playCustomBuffer(customSfx.screamer, effectsBus, 0.95, 1.0, 0, 1.8);
+    return;
+  }
+  if(!noiseBuffer) return;
   const now = ac.currentTime;
 
   const staticSrc = ac.createBufferSource();
@@ -2418,6 +2529,17 @@ function playOriginalSlenderScreamerSound(){
 
 function sfx(n){
   if(n==='step'){
+    if(customSfx.pasos){
+      const now = performance.now();
+      if(now - lastStepSfxTime > 360){
+        lastStepSfxTime = now;
+        const isSprinting = (keys.shift || vrSprintPressed) && !exhausted;
+        const rate = isSprinting ? rand(1.15, 1.28) : rand(0.92, 1.06);
+        const randomOffset = rand(0, Math.max(0, customSfx.pasos.duration - 0.6));
+        playCustomBuffer(customSfx.pasos, effectsBus, isSprinting ? 0.55 : 0.38, rate, randomOffset, 0.36);
+      }
+      return;
+    }
     if(currentZone === 'CABAÑA EN RUINAS'){
       tone(135, 0.08, 'sawtooth', 0.045, 0.75, 0);
       pannedNoise(0.05, 420, 0.045, 0);
@@ -2465,6 +2587,10 @@ function sfx(n){
     tone(68, 0.18, 'sine', 0.04, 0.72, 0.86, pan * 0.6);
   }
   if(n==='thunder'){
+    if(customSfx.trueno){
+      playCustomBuffer(customSfx.trueno, ambienceBus, 0.75, rand(0.92, 1.08));
+      return;
+    }
     tone(85, 0.9, 'sawtooth', 0.25, 0.25, 0.15);
     tone(50, 1.2, 'triangle', 0.3, 0.3, 0.2);
   }
@@ -2478,6 +2604,7 @@ function sfx(n){
 
 renderer.xr.addEventListener('sessionstart',()=>{
   initAudio(); initMicrophone(); gameOverActive = false; gameOverPanel3D.visible = false; resetGame(); playing = true;
+  setMenuMusicActive(false);
   hidePauseUI();
   startMenu.classList.add('hidden');
   endScreen.classList.add('hidden');
@@ -2498,6 +2625,7 @@ renderer.xr.addEventListener('sessionend',()=>{
   loadRecords();
   startMenu.classList.remove('hidden');
   hudOverlay.classList.add('hidden');
+  setMenuMusicActive(true);
   resizeRendererToApp();
 });
 
