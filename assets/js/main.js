@@ -8,11 +8,34 @@ const WALK_SPEED = 3.3;         // Velocidad caminando
 const SPRINT_SPEED = 5.4;       // Velocidad esprintando
 const rand = (a,b)=>a+Math.random()*(b-a);
 
+// Almacenamiento seguro con respaldo en memoria por si el navegador bloquea localStorage (ej. file:// o incógnito)
+const memoryStorage = {};
+function storageGet(key){
+  try{
+    const val = localStorage.getItem(key);
+    if(val !== null){
+      memoryStorage[key] = val;
+      return val;
+    }
+  }catch{}
+  return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
+}
+function storageSet(key, val){
+  const strVal = String(val);
+  memoryStorage[key] = strVal;
+  try{
+    localStorage.setItem(key, strVal);
+    return true;
+  }catch{
+    return false;
+  }
+}
+
 const AUDIO_PREFS_KEY = 'slender_audio_mix_v1';
 const DEFAULT_AUDIO_PREFS = { music: 58, ambience: 48, effects: 68, muted: false };
 function loadAudioPrefs(){
   try{
-    const saved = JSON.parse(localStorage.getItem(AUDIO_PREFS_KEY) || '{}');
+    const saved = JSON.parse(storageGet(AUDIO_PREFS_KEY) || '{}');
     return {
       music: Math.max(0, Math.min(100, Number(saved.music ?? DEFAULT_AUDIO_PREFS.music))),
       ambience: Math.max(0, Math.min(100, Number(saved.ambience ?? DEFAULT_AUDIO_PREFS.ambience))),
@@ -29,7 +52,7 @@ const GAME_SETTINGS_KEY = 'slender_game_settings_v2';
 const DEFAULT_GAME_SETTINGS = { quality: 'balanced', reducedMotion: false, microphone: true };
 function loadGameSettings(){
   try{
-    const saved = JSON.parse(localStorage.getItem(GAME_SETTINGS_KEY) || '{}');
+    const saved = JSON.parse(storageGet(GAME_SETTINGS_KEY) || '{}');
     return {
       quality: ['performance','balanced','quality'].includes(saved.quality) ? saved.quality : DEFAULT_GAME_SETTINGS.quality,
       reducedMotion: Boolean(saved.reducedMotion ?? DEFAULT_GAME_SETTINGS.reducedMotion),
@@ -59,7 +82,6 @@ renderer.domElement.setAttribute('aria-label', 'Escenario tridimensional de SLEN
 renderer.domElement.style.touchAction = 'none';
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
-// Escalado de framebuffer moderado para mantener una tasa de cuadros estable en Quest 3S.
 renderer.xr.setFramebufferScaleFactor?.(QUALITY_PRESETS[gameSettings.quality].xrScale);
 app.appendChild(renderer.domElement);
 
@@ -69,7 +91,7 @@ scene.fog = new THREE.FogExp2(0x020103, baseFogDensity);
 const camera = new THREE.PerspectiveCamera(70, app.clientWidth/app.clientHeight, 0.05, 160);
 camera.position.y = 1.6;
 
-// Panel de pausa 3D: el DOM de la página no se muestra dentro de una sesión WebXR inmersiva.
+// Panel de pausa 3D
 const pauseMenuCanvas = document.createElement('canvas');
 pauseMenuCanvas.width = 1024;
 pauseMenuCanvas.height = 768;
@@ -87,8 +109,7 @@ pauseMenu3D.renderOrder = 1000;
 pauseMenu3D.visible = false;
 camera.add(pauseMenu3D);
 
-
-// Paneles de evento y resultado: se dibujan en canvas para verse también dentro de WebXR inmersivo.
+// Paneles de evento y resultado en VR
 const firstContactCanvas = document.createElement('canvas');
 firstContactCanvas.width = 760; firstContactCanvas.height = 320;
 const firstContactTexture = new THREE.CanvasTexture(firstContactCanvas);
@@ -121,7 +142,7 @@ gameOverPanel3D.renderOrder = 1002;
 gameOverPanel3D.visible = false;
 camera.add(gameOverPanel3D);
 
-// AudioListener 3D vinculado a la cabeza del jugador para sonido espacial en Meta Quest 3S
+// AudioListener 3D vinculado a la cabeza del jugador
 const audioListener = new THREE.AudioListener();
 camera.add(audioListener);
 
@@ -130,7 +151,7 @@ dolly.position.set(0,0,6);
 
 document.getElementById('enter').appendChild(VRButton.createButton(renderer));
 function resizeRendererToApp(){
-  if(renderer.xr.isPresenting) return; // WebXR administra su propio framebuffer y viewport.
+  if(renderer.xr.isPresenting) return;
   const width = Math.max(1, app.clientWidth);
   const height = Math.max(1, app.clientHeight);
   renderer.setSize(width, height, false);
@@ -169,7 +190,7 @@ function getNoiseThreshold(){
   return isNightmare() ? 0.024 : 0.034;
 }
 
-/* ================= Récords Locales (localStorage) ================= */
+/* ================= Récords Locales (Tiempo + Puntuación con respaldo seguro) ================= */
 function formatTime(sec){
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -178,10 +199,22 @@ function formatTime(sec){
 }
 
 function loadRecords(){
-  const rn = localStorage.getItem('slender_rec_normal');
-  const rp = localStorage.getItem('slender_rec_nightmare');
-  document.getElementById('rec-normal').textContent = rn ? formatTime(parseFloat(rn)) : '--:--';
-  document.getElementById('rec-nightmare').textContent = rp ? formatTime(parseFloat(rp)) : '--:--';
+  const rnTime = storageGet('slender_rec_normal');
+  const rnScore = Number(storageGet('slender_best_score_normal') || 0);
+  const rpTime = storageGet('slender_rec_nightmare');
+  const rpScore = Number(storageGet('slender_best_score_nightmare') || 0);
+
+  const recNormalEl = document.getElementById('rec-normal');
+  const recNightmareEl = document.getElementById('rec-nightmare');
+
+  if(recNormalEl){
+    const timeStr = rnTime !== null && Number.isFinite(parseFloat(rnTime)) ? formatTime(parseFloat(rnTime)) : '--:--';
+    recNormalEl.textContent = rnScore > 0 ? `${timeStr} (${rnScore} PTS)` : timeStr;
+  }
+  if(recNightmareEl){
+    const timeStr = rpTime !== null && Number.isFinite(parseFloat(rpTime)) ? formatTime(parseFloat(rpTime)) : '--:--';
+    recNightmareEl.textContent = rpScore > 0 ? `${timeStr} (${rpScore} PTS)` : timeStr;
+  }
 }
 loadRecords();
 
@@ -433,6 +466,27 @@ flashRig.add(fBody, fHead, fLens, beamMesh, flashlight);
 flashRig.position.set(0.24, -0.22, -0.32);
 camera.add(flashRig);
 
+/* ================= Indicador Flotante de Interacción VR ================= */
+const vrPromptTex = pixelTex(128, 32, (g, w, h)=>{
+  g.fillStyle = 'rgba(10, 10, 16, 0.92)';
+  g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#ffec27';
+  g.lineWidth = 3;
+  g.strokeRect(2, 2, w - 4, h - 4);
+  g.fillStyle = '#ffec27';
+  g.font = 'bold 11px monospace';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText('[GATILLO DER / A]', w / 2, h / 2);
+});
+const vrPromptSprite = new THREE.Sprite(
+  new THREE.SpriteMaterial({map: vrPromptTex, transparent: true, depthTest: false})
+);
+vrPromptSprite.scale.set(0.56, 0.14, 1);
+vrPromptSprite.renderOrder = 995;
+vrPromptSprite.visible = false;
+scene.add(vrPromptSprite);
+
 /* ================= Construcción de los 4 Escenarios + Props Ambientales ================= */
 const colliders = [];
 const hidingSpots = [];
@@ -536,7 +590,7 @@ addHidingSpot(ruinCenter.x - 4.65, 1.4, ruinCenter.z - 2, Math.PI/2);
 addHidingSpot(ruinCenter.x + 2, 1.35, ruinCenter.z - 4.65, 0);
 addHidingSpot(ruinCenter.x - 2, 1.35, ruinCenter.z + 4.65, Math.PI);
 
-// Radio vieja dentro de la cabaña (referencia sonora y visual)
+// Radio vieja dentro de la cabaña
 const oldRadio = new THREE.Group();
 const radioBox = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.24, 0.22), new THREE.MeshLambertMaterial({color:0x1b1b22}));
 const radioLed = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.02), new THREE.MeshBasicMaterial({color:0xff1e38}));
@@ -658,7 +712,6 @@ for(let i=0; i<135; i++){
     if(face === 3) addHidingSpot(x - off, 1.45, z, -Math.PI/2);
   }
 
-  // Murciélagos ocultos en algunos árboles que salen volando si pasas cerca
   if(i % 14 === 0 && bats.length < 10){
     const batGrp = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.16), batMat);
@@ -778,7 +831,6 @@ const pageCollectionSlots = [...document.querySelectorAll('.page-slot')];
 const pageCollectionProgress = document.getElementById('page-collection-progress');
 let previewTimeout = null;
 
-// El aviso también se dibuja en un plano unido a la cámara: los overlays DOM no se muestran dentro de WebXR inmersivo.
 const vrPageNoticeCanvas = document.createElement('canvas');
 vrPageNoticeCanvas.width = 640; vrPageNoticeCanvas.height = 420;
 const vrPageNoticeTexture = new THREE.CanvasTexture(vrPageNoticeCanvas);
@@ -1026,22 +1078,44 @@ const noiseStatEl  = document.getElementById('noise-status');
 const hudSignalEl = document.getElementById('hud-signal');
 const hudSignalTextEl = document.getElementById('hud-signal-text');
 const hudSignalFillEl = document.getElementById('hud-signal-fill');
-// Vector auxiliar inicializado antes de resetGame(): evita acceder a `head`
-// durante su zona temporal muerta en la primera inicialización del módulo.
 const pageSignalPosition = new THREE.Vector3();
+const pageSignalForward = new THREE.Vector3();
 
 function getNearestPageSignal(){
-  if(!pages.length) return {distance: Infinity, label: 'SIN RASTRO', level: 'none', strength: 0};
+  if(!pages.length) return {distance: Infinity, label: 'SIN RASTRO', level: 'none', strength: 0, arrow: '•'};
   const playerPosition = camera.getWorldPosition(pageSignalPosition);
+  camera.getWorldDirection(pageSignalForward);
+  pageSignalForward.y = 0;
+  pageSignalForward.normalize();
+
   let nearest = Infinity;
+  let nearestPage = null;
   for(const page of pages){
-    const distance = page.m.position.distanceTo(playerPosition);
-    if(distance < nearest) nearest = distance;
+    const distance = Math.hypot(page.m.position.x - playerPosition.x, page.m.position.z - playerPosition.z);
+    if(distance < nearest){
+      nearest = distance;
+      nearestPage = page;
+    }
   }
-  if(nearest < 5.5) return {distance: nearest, label: 'SEÑAL FUERTE', level: 'strong', strength: 100};
-  if(nearest < 12) return {distance: nearest, label: 'SEÑAL MEDIA', level: 'medium', strength: 68};
-  if(nearest < 23) return {distance: nearest, label: 'SEÑAL DÉBIL', level: 'weak', strength: 34};
-  return {distance: nearest, label: 'BUSCANDO...', level: 'none', strength: 8};
+
+  let arrow = '▲';
+  if(nearestPage){
+    const dx = nearestPage.m.position.x - playerPosition.x;
+    const dz = nearestPage.m.position.z - playerPosition.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const nx = dx / len;
+    const nz = dz / len;
+    const dot = pageSignalForward.x * nx + pageSignalForward.z * nz;
+    const cross = pageSignalForward.x * nz - pageSignalForward.z * nx;
+    if(dot > 0.72) arrow = '▲';
+    else if(dot < -0.72) arrow = '▼';
+    else arrow = cross > 0 ? '►' : '◄';
+  }
+
+  if(nearest < 5.5) return {distance: nearest, label: `SEÑAL FUERTE ${arrow}`, level: 'strong', strength: 100, arrow};
+  if(nearest < 12) return {distance: nearest, label: `SEÑAL MEDIA ${arrow}`, level: 'medium', strength: 68, arrow};
+  if(nearest < 23) return {distance: nearest, label: `SEÑAL DÉBIL ${arrow}`, level: 'weak', strength: 34, arrow};
+  return {distance: nearest, label: `BUSCANDO... ${arrow}`, level: 'none', strength: 8, arrow};
 }
 
 function updatePageSignalUI(){
@@ -1081,7 +1155,6 @@ function drawPanel(msg){
     g.fillStyle='#ffec27'; g.font='bold 18px monospace';
     g.fillText(`NOTAS:${pagesFound}/${TOTAL_PAGES}  ${formatTime(timeLeft)}`,160,30);
 
-    // Ocho marcas de archivo visibles en el panel de muñeca dentro del visor.
     for(let i=0;i<TOTAL_PAGES;i++){
       const x = 60 + i*25;
       g.fillStyle = i < pagesFound ? '#b3001b' : '#191820';
@@ -1121,7 +1194,7 @@ function drawPanel(msg){
     g.textAlign='center';
     g.fillStyle = pageSignal.level === 'strong' ? '#ff455c' : (pageSignal.level === 'medium' ? '#ff9d43' : (pageSignal.level === 'weak' ? '#ffec27' : '#8c8790'));
     g.font='bold 12px monospace';
-    g.fillText(`RASTRO DE NOTA: ${pageSignal.label}`, 160, 178);
+    g.fillText(`RASTRO: ${pageSignal.label}`, 160, 178);
   }
   panelTex.needsUpdate = true;
 }
@@ -1169,7 +1242,6 @@ function stopMicrophone(){
   noiseStatEl.textContent = 'MICRÓFONO DESACTIVADO';
 }
 
-// Libera el permiso y las pistas al terminar la partida o abandonar la página.
 window.addEventListener('pagehide', stopMicrophone);
 
 function updateMicrophone(){
@@ -1294,6 +1366,7 @@ function finishCinematicIntro(){
   const timer = setTimeout(()=>{
     cinematicIntro.classList.add('is-hidden');
     cinematicIntro.classList.remove('is-closing');
+    loadRecords();
     startMenu.classList.remove('hidden');
     introPlayButton.disabled = false;
     introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
@@ -1308,7 +1381,6 @@ function showCinematicScene(index){
   if(!sceneData){ finishCinematicIntro(); return; }
 
   introContent?.classList.remove('is-cut');
-  // Reinicia la animación de entrada sin provocar un salto del layout.
   if(introContent) void introContent.offsetWidth;
   introContent?.classList.add('is-cut');
 
@@ -1333,7 +1405,6 @@ function startCinematicIntro(){
   introSequenceActive = true;
   introPlayButton.disabled = true;
   introPlayButton.textContent = 'TRANSMISIÓN EN CURSO...';
-  // El audio mejora la introducción, pero nunca debe impedir que la secuencia visual funcione.
   try{
     initAudio();
     if(ac?.state === 'suspended') ac.resume().catch(()=>{});
@@ -1349,6 +1420,7 @@ function skipCinematicIntro(){
   cinematicIntro.classList.add('is-hidden');
   cinematicIntro.classList.remove('is-closing');
   cinematicIntro.setAttribute('aria-hidden', 'true');
+  loadRecords();
   startMenu.classList.remove('hidden');
   introPlayButton.disabled = false;
   introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
@@ -1395,9 +1467,7 @@ renderer.domElement.addEventListener('webglcontextrestored',()=>{
 });
 
 function saveGameSettings(){
-  try{ localStorage.setItem(GAME_SETTINGS_KEY, JSON.stringify(gameSettings)); }catch(err){
-    console.warn('No se pudieron guardar los ajustes:', err);
-  }
+  storageSet(GAME_SETTINGS_KEY, JSON.stringify(gameSettings));
 }
 
 function applyGraphicsQuality(){
@@ -1446,9 +1516,7 @@ renderGameSettings();
 applyGraphicsQuality();
 
 function saveAudioPrefs(){
-  try{ localStorage.setItem(AUDIO_PREFS_KEY, JSON.stringify(audioPrefs)); }catch(err){
-    console.warn('No se pudieron guardar las preferencias de audio:', err);
-  }
+  storageSet(AUDIO_PREFS_KEY, JSON.stringify(audioPrefs));
 }
 
 function renderAudioPrefs(){
@@ -1660,6 +1728,7 @@ function returnToMainMenuFromPause(){
   paused = false;
   stopMicrophone();
   resetGame();
+  loadRecords();
   hudOverlay.classList.add('hidden');
   endScreen.classList.add('hidden');
   startMenu.classList.remove('hidden');
@@ -1671,7 +1740,6 @@ function activatePauseSelection(){
   else if(pauseSelection === 1) restartFromPause();
   else returnToMainMenuFromPause();
 }
-
 
 function restartFromGameOver(){
   gameOverActive = false;
@@ -1693,6 +1761,7 @@ function exitGameOverToMenu(){
   if(session) session.end();
   else {
     resetGame();
+    loadRecords();
     startMenu.classList.remove('hidden');
     endScreen.classList.add('hidden');
   }
@@ -1754,7 +1823,7 @@ audioPreviewButton?.addEventListener('click', async ()=>{
   musicTone(174.61, 1.25, 'sine', 0.045, 0.12, 0.32);
   musicTone(155.56, 1.4, 'triangle', 0.055, 0, 0.78);
   musicTone(73.42, 1.8, 'sine', 0.025, 0, 0.12);
-  tone(392, 0.5, 'sine', 0.035, 0.72, 0.85);
+  tone(392, 0.5, 'sine', 0.035, 0.72, 0.85, 0.35);
   if(audioStatusElement) audioStatusElement.textContent = 'PRUEBA: TONOS AMBIENTALES SUAVES Y MOTIVO ORIGINAL';
 });
 document.getElementById('btn-end-restart')?.addEventListener('click', ()=>{
@@ -1766,6 +1835,7 @@ btnRetry.addEventListener('click', ()=>{
   gameOverActive = false;
   gameOverPanel3D.visible = false;
   resetGame();
+  loadRecords();
   hidePauseUI();
   endScreen.classList.add('hidden');
   hudOverlay.classList.add('hidden');
@@ -1799,6 +1869,7 @@ function finishGame(won, reasonText){
   playing = false;
   hidePauseUI();
   hideFirstEncounter();
+  vrPromptSprite.visible = false;
   hudOverlay.classList.add('hidden');
   pageViewerEl.classList.add('hidden');
   vrPageNotice.visible = false;
@@ -1830,31 +1901,31 @@ function finishGame(won, reasonText){
 
   const recMsgEl = document.getElementById('end-record-msg');
   const messages = [];
-  try{
-    const scoreStorageKey = `slender_best_score_${modeKey}`;
-    const previousBestScore = Number(localStorage.getItem(scoreStorageKey) || 0);
-    if(score > previousBestScore){
-      localStorage.setItem(scoreStorageKey, String(score));
-      bestScore = score;
-      messages.push('★ NUEVO RÉCORD DE PUNTUACIÓN GUARDADO ★');
-    }else{
-      bestScore = previousBestScore;
-    }
-    if(won){
-      const timeKey = `slender_rec_${modeKey}`;
-      const previousTime = Number(localStorage.getItem(timeKey) || 0);
-      if(!previousTime || elapsed < previousTime){
-        localStorage.setItem(timeKey, String(elapsed));
-        messages.push('★ NUEVO RÉCORD DE TIEMPO GUARDADO ★');
-        loadRecords();
-      }
-    }
-  }catch(storageError){
-    console.warn('No se pudieron guardar los récords locales:', storageError);
+
+  const scoreStorageKey = `slender_best_score_${modeKey}`;
+  const previousBestScore = Number(storageGet(scoreStorageKey) || 0);
+  if(score > previousBestScore){
+    storageSet(scoreStorageKey, score);
+    bestScore = score;
+    messages.push('★ NUEVO RÉCORD DE PUNTUACIÓN GUARDADO ★');
+  }else{
+    bestScore = previousBestScore;
   }
+
+  if(won){
+    const timeKey = `slender_rec_${modeKey}`;
+    const rawPreviousTime = storageGet(timeKey);
+    const previousTime = rawPreviousTime !== null ? parseFloat(rawPreviousTime) : 0;
+    if(!previousTime || elapsed < previousTime){
+      storageSet(timeKey, elapsed.toFixed(2));
+      messages.push('★ NUEVO RÉCORD DE TIEMPO GUARDADO ★');
+    }
+  }
+  loadRecords();
+
   document.getElementById('end-best-score').textContent = String(bestScore).padStart(4,'0');
   recMsgEl.textContent = messages.join('  ·  ') || (won ? 'ARCHIVO COMPLETADO. LA GRABACIÓN SE CONSERVÓ.' : 'EL EXPEDIENTE QUEDÓ INCOMPLETO. PUEDES INTENTARLO DE NUEVO.');
-  stopMicrophone(); // La detección por voz ya no es necesaria en la pantalla de resultados.
+  stopMicrophone();
 
   endScreen.dataset.result = won ? 'victory' : 'defeat';
   if(renderer.xr.isPresenting){
@@ -1876,6 +1947,7 @@ function resetGame(){
   paused = false; gameOverActive = false; screamerTimer = 0; nextTpTimer = rand(5.5,9.5) / diffMultiplier;
   firstEncounterShown = false; firstEncounterTimer = 0;
   gameOverPanel3D.visible = false;
+  vrPromptSprite.visible = false;
   hideFirstEncounter();
   flashFailTimer = 0; stealthTimer = 0; invertControlsTimer = 0; breathTimer = 0;
   forestEventTimer = rand(15,22) / diffMultiplier; ambientGlitchTimer = 0; ambientApparitionTimer = 0;
@@ -1919,7 +1991,6 @@ function initAudio(){
   effectsBus.connect(master);
   applyAudioMix();
 
-  // Ruido coloreado de baja intensidad: se reserva para ráfagas breves, no como viento continuo.
   const bufSize = ac.sampleRate * 2;
   noiseBuffer = ac.createBuffer(1, bufSize, ac.sampleRate);
   const data = noiseBuffer.getChannelData(0);
@@ -1930,7 +2001,6 @@ function initAudio(){
     data[i] = filteredNoise * 1.65;
   }
 
-  // 1. Audio Espacial 3D en Slenderman (zumbido grave que te permite ubicarlo de oído)
   slenderPosAudio = new THREE.PositionalAudio(audioListener);
   const posOsc = audioListener.context.createOscillator();
   const posGain = audioListener.context.createGain();
@@ -1945,7 +2015,6 @@ function initAudio(){
   slender.add(slenderPosAudio);
   posOsc.start();
 
-  // 2. Susurros Binaurales 3D detrás de tu nuca cuando Slenderman acecha o baja tu cordura
   whisperPosAudio = new THREE.PositionalAudio(audioListener);
   const whispOscA = audioListener.context.createOscillator();
   const whispOscB = audioListener.context.createOscillator();
@@ -1958,7 +2027,7 @@ function initAudio(){
   whispOscA.connect(whispFilter); whispOscB.connect(whispFilter); whispFilter.connect(whispGain);
   whisperPosAudio.setNodeSource(whispGain);
   whisperPosAudio.setRefDistance(1.2); whisperPosAudio.setMaxDistance(12); whisperPosAudio.setRolloffFactor(1.8);
-  whisperPosAudio.position.set(0, 0, 0.75); // Tono grave detrás de la cabeza, sin siseo continuo.
+  whisperPosAudio.position.set(0, 0, 0.75);
   camera.add(whisperPosAudio);
   whispOscA.start(); whispOscB.start();
 
@@ -1973,7 +2042,6 @@ function initAudio(){
     whispOscB.frequency.setTargetAtTime(118 + Math.random() * 8, ac.currentTime, 0.3);
   }, 180);
 
-  // 3. Audio Espacial 3D de la Radio Rota en la Cabaña (estática intermitente)
   const radioPosAudio = new THREE.PositionalAudio(audioListener);
   const radOscA = audioListener.context.createOscillator();
   const radOscB = audioListener.context.createOscillator();
@@ -1990,7 +2058,6 @@ function initAudio(){
   oldRadio.add(radioPosAudio);
   radOscA.start(); radOscB.start();
 
-  // 4. Audio Espacial 3D en el Altar Ritual (cántico grave ceremonial)
   const altarPosAudio = new THREE.PositionalAudio(audioListener);
   const altOsc = audioListener.context.createOscillator();
   const altGain = audioListener.context.createGain();
@@ -2004,7 +2071,6 @@ function initAudio(){
   altarOrb.add(altarPosAudio);
   altOsc.start();
 
-  // 5. Zumbido eléctrico sutil de la linterna encendida
   const flashOsc = ac.createOscillator();
   flashBuzzGain = ac.createGain();
   flashOsc.type = 'sine';
@@ -2013,7 +2079,6 @@ function initAudio(){
   flashOsc.connect(flashBuzzGain).connect(effectsBus);
   flashOsc.start();
 
-  // 6. Fondo atmosférico tonal: elimina el soplido continuo de ruido blanco.
   const droneOsc = ac.createOscillator();
   const droneHarmonic = ac.createOscillator();
   const droneGain = ac.createGain();
@@ -2025,7 +2090,6 @@ function initAudio(){
   droneOsc.connect(lpf); droneHarmonic.connect(lpf); lpf.connect(droneGain).connect(ambienceBus);
   droneOsc.start(); droneHarmonic.start();
 
-  // Viento sugerido con batimientos graves y una modulación muy lenta, no con hiss permanente.
   const windOscA = ac.createOscillator();
   const windOscB = ac.createOscillator();
   const windGain = ac.createGain();
@@ -2042,37 +2106,33 @@ function initAudio(){
   windOscA.connect(windFilter); windOscB.connect(windFilter); windFilter.connect(windGain).connect(ambienceBus);
   windOscA.start(); windOscB.start(); windLfo.start();
 
-  // 7. Sonidos ambientales aleatorios por zona (grillos, cuervos, campanas, ramas rotas)
   setInterval(()=>{
     if(ac.state !== 'running' || !playing || paused) return;
     const r = Math.random();
 
     if(currentZone === 'CEMENTERIO' && r < 0.45){
-      // Campanada fúnebre grave con eco + graznido de cuervo
-      tone(110, 1.8, 'sine', 0.14, 0.96, 0);
-      tone(220, 1.2, 'triangle', 0.05, 0.95, 0.05);
-      tone(185, 0.32, 'triangle', 0.035, 0.72, 0.12);
+      const pan = rand(-0.6, 0.6);
+      tone(110, 1.8, 'sine', 0.14, 0.96, 0, pan);
+      tone(220, 1.2, 'triangle', 0.05, 0.95, 0.05, pan);
+      tone(185, 0.32, 'triangle', 0.035, 0.72, 0.12, -pan);
     } else if(r < 0.32){
-      // Grillos nocturnos 8-bits
-      for(let k=0; k<3; k++) tone(2650, 0.03, 'square', 0.025, 0, k*0.07);
+      const pan = rand(-0.85, 0.85);
+      for(let k=0; k<3; k++) tone(2650, 0.03, 'square', 0.025, 0, k*0.07, pan);
     } else if(r < 0.62){
-      // Crujido de rama rota a izquierda o derecha (paranoia)
-      const pan = Math.random() < 0.5 ? -0.85 : 0.85;
-      tone(118, 0.13, 'triangle', 0.055, 0.55, 0);
-      tone(82, 0.18, 'sine', 0.042, 0.7, 0.08);
+      const pan = Math.random() < 0.5 ? -0.88 : 0.88;
+      tone(118, 0.13, 'triangle', 0.055, 0.55, 0, pan);
+      tone(82, 0.18, 'sine', 0.042, 0.7, 0.08, pan);
     } else if(r < 0.82){
-      // Búho nocturno lejano
-      tone(340, 0.25, 'sine', 0.045, 0.92, 0);
-      tone(285, 0.55, 'sine', 0.045, 0.88, 0.35);
+      const pan = rand(-0.75, 0.75);
+      tone(340, 0.25, 'sine', 0.045, 0.92, 0, pan);
+      tone(285, 0.55, 'sine', 0.045, 0.88, 0.35, pan);
     } else if(sanity < 75 || isNightmare()){
-      tone(180, 0.22, 'sawtooth', 0.05, 1.3, 0);
-      tone(220, 0.28, 'sawtooth', 0.05, 0.7, 0.28);
+      const pan = rand(-0.9, 0.9);
+      tone(180, 0.22, 'sawtooth', 0.05, 1.3, 0, pan);
+      tone(220, 0.28, 'sawtooth', 0.05, 0.7, 0.28, -pan);
     }
   }, 2400);
 
-  // 8. Música de fondo dinámica por capas según páginas recogidas
-  // Tema original de terror: motivo menor y disonante, creado por síntesis Web Audio.
-  // No utiliza melodías, grabaciones ni archivos musicales de terceros.
   const openingTheme = [146.83, 0, 174.61, 155.56, 0, 130.81, 116.54, 0, 146.83, 0, 196.0, 174.61, 0, 116.54, 130.81, 0];
   const lowTheme = [73.42, 0, 65.41, 0, 58.27, 0, 69.30, 0];
   const musicBox = [659.2, 698.5, 466.2, 440.0, 0, 523.3, 493.9, 329.6, 311.1, 0, 220.0, 233.1];
@@ -2085,20 +2145,17 @@ function initAudio(){
       const distanceToSlender = head.distanceTo(slender.position);
       const tension = Math.max(0, (18 - distanceToSlender) / 18, pagesFound / TOTAL_PAGES, isNightmare() ? 0.55 : 0);
 
-      // Tema principal desde el inicio: una melodía lenta y sombría en registro menor.
       const themeNote = openingTheme[step % openingTheme.length];
       if(themeNote > 0){
         musicTone(themeNote, 0.82, 'triangle', 0.035 + tension * 0.018, (step % 2 ? 0.12 : -0.12));
         if(step % 4 === 0) musicTone(lowTheme[(step / 2) % lowTheme.length] || 65.41, 1.25, 'sine', 0.024 + tension * 0.012, 0);
       }
 
-      // CAPA 1 (2+ notas o Pesadilla): bajo pulsante que aumenta la tensión.
       if(pagesFound >= 2 || isNightmare()){
         const d = deepHits[step % deepHits.length];
         if(d > 0) musicTone(d, 0.65, 'sawtooth', 0.055 + pagesFound*0.008 + tension*0.025, 0);
       }
 
-      // CAPA 2 (4+ notas o Pesadilla): caja de música desafinada.
       if(pagesFound >= 4 || isNightmare()){
         const n = musicBox[step % musicBox.length];
         if(n > 0){
@@ -2108,21 +2165,23 @@ function initAudio(){
         }
       }
 
-      // CAPA 3 (6+ notas): trémolo agudo disonante de persecución final.
       if(pagesFound >= 6 && step % 2 === 0){
         musicTone(880 + (step%3)*62, 0.14, 'sawtooth', 0.024 + tension*0.012, 0);
       }
 
-      // Destello sonoro agudo al estar cerca de una nota oculta
       camera.getWorldPosition(head);
+      camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
       for(const p of pages){
-        if(p.m.position.distanceTo(head) < 4.5 && step % 3 === 0){
-          tone(1320, 0.04, 'sine', 0.025);
+        const pDist = Math.hypot(p.m.position.x - head.x, p.m.position.z - head.z);
+        if(pDist < 5.0 && step % 3 === 0){
+          const dx = (p.m.position.x - head.x) / (pDist || 1);
+          const dz = (p.m.position.z - head.z) / (pDist || 1);
+          const pan = fwd.x * dz - fwd.z * dx;
+          tone(1320, 0.04, 'sine', 0.03, 0, 0, pan);
           break;
         }
       }
 
-      // Latidos de corazón acelerados cuando Slenderman está cerca
       const dist = head.distanceTo(slender.position);
       if((dist < 14 || pagesFound >= 4 || isNightmare()) && step % 2 === 0){
         const vol = Math.min(0.32, (15 - dist) * 0.022 + pagesFound * 0.014 + (isNightmare()?0.04:0));
@@ -2153,13 +2212,14 @@ function pannedNoise(dur, freq, vol, panVal=0, when=0){
   src.start(now); src.stop(now + dur);
 }
 
-function tone(f,d,type='square',v=.2,slide=0,when=0){
+function tone(f,d,type='square',v=.2,slide=0,when=0,panVal=0){
   if(!ac) return;
-  const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime+when;
+  const o = ac.createOscillator(), g = ac.createGain(), pan = ac.createStereoPanner(), t = ac.currentTime+when;
   o.type = type; o.frequency.setValueAtTime(f,t);
   if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(20,f*slide),t+d);
+  pan.pan.setValueAtTime(Math.max(-1, Math.min(1, panVal)), t);
   g.gain.setValueAtTime(v,t); g.gain.exponentialRampToValueAtTime(.0001,t+d);
-  o.connect(g).connect(effectsBus); o.start(t); o.stop(t+d);
+  o.connect(g).connect(pan).connect(effectsBus); o.start(t); o.stop(t+d);
 }
 
 function musicTone(frequency, duration, type='sine', volume=0.04, panValue=0, when=0){
@@ -2210,25 +2270,20 @@ function playOriginalSlenderScreamerSound(){
 function sfx(n){
   if(n==='step'){
     if(currentZone === 'CABAÑA EN RUINAS'){
-      // Madera vieja rechinando bajo tus botas
       tone(135, 0.08, 'sawtooth', 0.045, 0.75, 0);
       pannedNoise(0.05, 420, 0.045, 0);
     } else {
-      // Pisada sobre tierra y hojas secas
       pannedNoise(0.055, 680 + rand(-120, 120), 0.05, 0);
     }
   }
   if(n==='breath'){
-    // Jadeo grave sintetizado, sin soplido de ruido blanco.
     tone(92, 0.30, 'triangle', 0.052, 0.62, 0);
     tone(68, 0.38, 'sine', 0.045, 0.78, 0.27);
   }
   if(n==='spark'){
-    // Chispazo eléctrico de linterna fallando
     pannedNoise(0.06, 3200, 0.09, 0.25);
   }
   if(n==='bats'){
-    // Aleteo rápido de bandada de murciélagos
     for(let i=0; i<5; i++) pannedNoise(0.06, 1200, 0.08, rand(-0.7, 0.7), i*0.07);
   }
   if(n==='page'){
@@ -2246,19 +2301,20 @@ function sfx(n){
     tone(196, 0.42, 'triangle', 0.075, 0.62, 0.12);
   }
   if(n==='whisperCue'){
-    tone(310, 0.52, 'sine', 0.035, 0.82, 0);
-    tone(233, 0.68, 'triangle', 0.028, 0.76, 0.22);
+    const pan = Math.random() < 0.5 ? -0.8 : 0.8;
+    tone(310, 0.52, 'sine', 0.035, 0.82, 0, pan);
+    tone(233, 0.68, 'triangle', 0.028, 0.76, 0.22, -pan);
   }
   if(n==='signal'){
     tone(980, 0.08, 'square', 0.065, 0.55, 0);
     tone(420, 0.24, 'sine', 0.07, 0.65, 0.08);
   }
   if(n==='distantFootsteps'){
-    tone(76, 0.16, 'triangle', 0.055, 0.7, 0);
-    tone(92, 0.16, 'triangle', 0.047, 0.68, 0.42);
-    tone(68, 0.18, 'sine', 0.04, 0.72, 0.86);
+    const pan = Math.random() < 0.5 ? -0.85 : 0.85;
+    tone(76, 0.16, 'triangle', 0.055, 0.7, 0, pan);
+    tone(92, 0.16, 'triangle', 0.047, 0.68, 0.42, pan * 0.8);
+    tone(68, 0.18, 'sine', 0.04, 0.72, 0.86, pan * 0.6);
   }
-
   if(n==='thunder'){
     tone(85, 0.9, 'sawtooth', 0.25, 0.25, 0.15);
     tone(50, 1.2, 'triangle', 0.3, 0.3, 0.2);
@@ -2284,11 +2340,13 @@ renderer.xr.addEventListener('sessionend',()=>{
   paused = false;
   gameOverActive = false;
   gameOverPanel3D.visible = false;
+  vrPromptSprite.visible = false;
   hideFirstEncounter();
   endScreen.classList.add('hidden');
   hidePauseUI();
   vrSprintPressed = false;
   resetGame();
+  loadRecords();
   startMenu.classList.remove('hidden');
   hudOverlay.classList.add('hidden');
   resizeRendererToApp();
@@ -2305,8 +2363,6 @@ let vrSprintPressed = false;
 let snapLock = false;
 let pauseNavLock = false;
 
-// Perfil WebXR Meta Quest Touch Plus: trigger=0, squeeze=1, stick click=3,
-// A/X=4, B/Y=5 y menú izquierdo=7. El botón Meta del sistema no se captura.
 const XR_BUTTON_INDEX = {
   thumbstick: 3,
   faceConfirm: 4,
@@ -2371,7 +2427,6 @@ for(let i=0;i<2;i++){
     if(c.userData.hand === 'left'){
       vrSprintPressed = true;
     } else if(c.userData.hand === 'right'){
-      // Gatillo derecho: interacción principal con páginas, pilas y objetos cercanos.
       c.userData.interactPressed = true;
       pulse(c,.35,35);
     }
@@ -2427,7 +2482,6 @@ function updateControllerButtons(){
       toggleFlashlight();
     }
 
-    // El joystick izquierdo navega por las opciones del menú de pausa.
     if(paused && c.userData.hand === 'left'){
       const navY = gamepad.axes[3] ?? gamepad.axes[1] ?? 0;
       if(Math.abs(navY) > 0.7 && !pauseNavLock){
@@ -2444,7 +2498,6 @@ function updateControllerButtons(){
     previous.thumbstick = thumbstick;
   }
 }
-
 
 function snapTurn(a){
   camera.getWorldPosition(head); const px = head.x, pz = head.z;
@@ -2493,7 +2546,6 @@ window.addEventListener('blur', clearDesktopInputs);
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){
     clearDesktopInputs();
-    // Al cambiar de pestaña en PC se pausa el juego; no se interviene en sesiones XR.
     if(playing && !paused && !renderer.xr.isPresenting) togglePause();
   }
 });
@@ -2533,7 +2585,6 @@ function move(dt){
     if(exhausted && stamina >= 45) exhausted = false;
   }
 
-  // Jadeos pesados al estar agotado o con poca resistencia
   if(exhausted || stamina < 25){
     breathTimer -= dt;
     if(breathTimer <= 0){
@@ -2586,25 +2637,43 @@ function updateItems(t){
   camera.getWorldPosition(head);
   camera.getWorldDirection(fwd);
 
-  // 1. Pilas para recargar la batería de la linterna
+  const inVR = renderer.xr.isPresenting;
+  const anyConfirmPressed = ctrls.some(c=>c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed);
+  let promptTarget = null;
+  let promptOffset = 0.35;
+
+  // 1. Pilas para recargar la batería de la linterna (distancia horizontal X/Z)
   for(let i=batteries.length-1; i>=0; i--){
     const b = batteries[i];
     b.m.rotation.y = t * 2.2 + b.phase;
     b.m.position.y = 0.25 + Math.sin(t * 3 + b.phase) * 0.05;
 
-    const inVR = renderer.xr.isPresenting;
-    let takeBat = !inVR && b.m.position.distanceTo(head) < 1.25;
+    const horizDist = Math.hypot(b.m.position.x - head.x, b.m.position.z - head.z);
     const batteryToPlayer = b.m.position.clone().sub(head).normalize();
-    const lookingAtBattery = b.m.position.distanceTo(head) < 1.25 && fwd.dot(batteryToPlayer) > 0.45;
-    const anyConfirmPressed = ctrls.some(c=>c.userData.interactPressed || c.userData.faceConfirmPressed);
+    const lookingAtBattery = horizDist < 1.85 && fwd.dot(batteryToPlayer) > 0.15;
 
+    let handNearBattery = false;
+    let handAction = false;
     for(const c of ctrls){
       c.getWorldPosition(tmp);
-      const handNearBattery = tmp.distanceTo(b.m.position) < 0.8;
-      const handAction = c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed;
-      if(inVR && handNearBattery && handAction) takeBat = true;
+      const near = tmp.distanceTo(b.m.position) < 1.15;
+      if(near){
+        handNearBattery = true;
+        if(c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed){
+          handAction = true;
+        }
+      }
     }
-    if(inVR && lookingAtBattery && anyConfirmPressed) takeBat = true;
+
+    if(inVR && (lookingAtBattery || handNearBattery) && !promptTarget){
+      promptTarget = b.m.position;
+      promptOffset = 0.32;
+    }
+
+    let takeBat = !inVR && horizDist < 1.35;
+    if(inVR && ((handNearBattery && handAction) || (lookingAtBattery && anyConfirmPressed))){
+      takeBat = true;
+    }
 
     if(takeBat && playing && !paused){
       scene.remove(b.m); batteries.splice(i, 1);
@@ -2620,19 +2689,30 @@ function updateItems(t){
     const p = pages[i];
     const toPage = p.m.position.clone().sub(head).normalize();
     const dist = p.m.position.distanceTo(head);
+    const horizDist = Math.hypot(p.m.position.x - head.x, p.m.position.z - head.z);
+    const lookingAtPage = horizDist < 1.75 && fwd.dot(toPage) > 0.35;
 
-    const inVR = renderer.xr.isPresenting;
-    // En PC se conserva la recolección por proximidad y mirada. En VR se solicita una acción explícita.
-    let got = !inVR && dist < 1.35 && fwd.dot(toPage) > 0.45;
-    const anyConfirmPressed = ctrls.some(c=>c.userData.interactPressed || c.userData.faceConfirmPressed);
-    if(inVR && dist < 1.35 && fwd.dot(toPage) > 0.45 && anyConfirmPressed) got = true;
-
+    let handNearPage = false;
+    let handAction = false;
     for(const c of ctrls){
       c.getWorldPosition(tmp);
       const handDist = tmp.distanceTo(p.m.position);
-      const handAction = c.userData.interactPressed || c.userData.faceConfirmPressed;
-      if(inVR && handDist < 0.62 && handAction) got = true;
-      if(inVR && handDist < 0.9 && c.userData.grabPressed) got = true;
+      if(handDist < 0.95){
+        handNearPage = true;
+        if(c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed){
+          handAction = true;
+        }
+      }
+    }
+
+    if(inVR && (lookingAtPage || handNearPage) && !promptTarget){
+      promptTarget = p.m.position;
+      promptOffset = 0.36;
+    }
+
+    let got = !inVR && dist < 1.45 && fwd.dot(toPage) > 0.40;
+    if(inVR && ((lookingAtPage && anyConfirmPressed) || (handNearPage && handAction))){
+      got = true;
     }
 
     if(got && playing && !paused){
@@ -2662,13 +2742,23 @@ function updateItems(t){
       }
     }
   }
+
+  if(inVR && promptTarget && playing && !paused){
+    vrPromptSprite.visible = true;
+    vrPromptSprite.position.set(
+      promptTarget.x,
+      promptTarget.y + promptOffset + Math.sin(t * 6) * 0.02,
+      promptTarget.z
+    );
+  } else {
+    vrPromptSprite.visible = false;
+  }
 }
 
 function teleportSlender(distFromPlayer, preferOffscreen=true){
   camera.getWorldPosition(head);
   camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
   const facingAngle = Math.atan2(fwd.z, fwd.x);
-  // En la mayoría de las apariciones llega desde atrás o un lateral, no desde un patrón fijo.
   const ang = preferOffscreen && Math.random() < 0.68
     ? facingAngle + Math.PI + rand(-1.05, 1.05)
     : rand(0, Math.PI * 2);
@@ -2689,13 +2779,11 @@ function triggerForestEvent(){
   camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
   const roll = Math.random();
   if(roll < 0.34){
-    // Una aparición real desde la periferia: cambia la posición y empieza a acechar.
     teleportSlender(rand(10.5, 17), true);
     nextTpTimer = rand(7.5, 12.5) / diffMultiplier;
     ambientGlitchTimer = rand(0.9, 1.55);
     sfx('manifestation');
   }else if(roll < 0.60){
-    // Silueta fugaz en el rabillo del ojo; no causa daño por sí sola.
     const baseAngle = Math.atan2(fwd.z, fwd.x);
     const angle = baseAngle + rand(-1.15, 1.15);
     const radius = rand(8, 13);
@@ -2711,12 +2799,10 @@ function triggerForestEvent(){
     ambientGlitchTimer = rand(0.55,0.95);
     sfx('whisperCue');
   }else if(roll < 0.82){
-    // Interferencia y parpadeo de linterna como falso aviso.
     ambientGlitchTimer = rand(0.5,1.25);
     flashFailTimer = Math.max(flashFailTimer, rand(0.18,0.38));
     sfx('signal');
   }else{
-    // Pasos graves en un lateral para provocar que el jugador mire atrás.
     ambientGlitchTimer = rand(0.2,0.55);
     sfx('distantFootsteps');
   }
@@ -2894,7 +2980,6 @@ renderer.setAnimationLoop(()=>{
   move(dt);
   updateItems(t);
 
-  // Animación de props ambientales (orbe del altar y LED de radio)
   altarOrb.rotation.y = t * 1.5;
   altarOrb.position.y = 1.35 + Math.sin(t * 2.5) * 0.08;
   radioLed.visible = Math.sin(t * 14) > 0;
