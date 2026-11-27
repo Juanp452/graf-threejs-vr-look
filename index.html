@@ -2,404 +2,241 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="description" content="SLENDER: THE 8 PAGES — experiencia de supervivencia 3D con Three.js y WebXR, optimizada para pruebas con Meta Quest 3S." />
-  <meta name="theme-color" content="#08070a" />
-  <meta name="color-scheme" content="dark" />
-  <title>SLENDER: THE 8 PAGES (8-BIT VR) - Meta Quest 3S</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://unpkg.com" crossorigin>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./assets/css/style.css?v=10" />
-
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#050508" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>SLENDER: THE 8 PAGES // VHS-1994</title>
+  <link rel="stylesheet" href="./assets/css/style.css" />
   <script type="importmap">
     {
       "imports": {
-        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
       }
     }
   </script>
 </head>
 <body>
+  <div id="app"></div>
 
-  <!-- Encabezado Institucional / Arcade -->
-  <header class="hero">
-    <div class="hero-topline">
-      <span class="coin-blink">● REC • VHS-1994 • NO HAGAS RUIDO</span>
-      <span class="hero-device">EXPERIENCIA VR · META QUEST 3S</span>
-    </div>
-    <div class="hero-title-wrap">
-      <span class="hero-overline">ARCHIVO DE CAMPO 08 / PINE RIDGE</span>
-      <h1>SLENDER: <span>8 PAGES</span></h1>
-      <p class="sub">NO ESTÁS SOLO EN EL BOSQUE. ENCUENTRA LAS 8 NOTAS, ADMINISTRA TU LUZ Y SOBREVIVE.</p>
-    </div>
-    <div class="hero-status-row" aria-label="Características del videojuego">
-      <span><i class="status-dot"></i> SUPERVIVENCIA</span>
-      <span>MICRÓFONO INTERACTIVO</span>
-      <span>AUDIO ESPACIAL 3D</span>
-      <span>WEBXR</span>
-    </div>
-  </header>
+  <!-- Efecto VHS y estática -->
+  <div id="vhs-overlay" aria-hidden="true">
+    <div class="vhs-scanlines"></div>
+    <div id="vhs-rec-text">● PLAY VHS-SP • 00:00:00</div>
+    <div id="vhs-tracking" class="hidden">AUTO TRACKING</div>
+  </div>
 
-  <!-- Introducción cinematográfica: aparece antes del menú y puede omitirse. -->
-  <section id="cinematic-intro" class="cinematic-intro" role="dialog" aria-modal="true" aria-labelledby="intro-title" aria-describedby="intro-copy">
-    <div class="intro-scanlines" aria-hidden="true"></div>
-    <div class="intro-vignette" aria-hidden="true"></div>
+  <!-- Introducción Cinemática -->
+  <section id="cinematic-intro" aria-hidden="false">
     <div class="intro-content">
-      <div class="intro-topline">
-        <span class="intro-rec"><i></i> REC</span>
-        <span>ARCHIVO PINE RIDGE //  VHS-SP</span>
-        <span class="intro-date">24·10·1994</span>
+      <p id="intro-kicker" class="tag-red">CINTA RECUPERADA · REGISTRO 08</p>
+      <h1 id="intro-title">PINE RIDGE</h1>
+      <p id="intro-copy">La última transmisión llegó desde el bosque a las 23:47. Después, solo quedó estática.</p>
+      <div class="intro-progress">
+        <div id="intro-progress-fill"></div>
       </div>
-
-      <div class="intro-signal-mark" aria-hidden="true">
-        <span class="intro-signal-ring ring-one"></span>
-        <span class="intro-signal-ring ring-two"></span>
-        <span class="intro-signal-core">08</span>
+      <p id="intro-counter" class="muted-small">ARCHIVO EN ESPERA</p>
+      <div class="btn-row">
+        <button id="btn-intro-play" class="btn-primary">▶ REPRODUCIR ARCHIVO</button>
+        <button id="btn-intro-skip" class="btn-secondary">SALTAR</button>
       </div>
-
-      <p id="intro-kicker" class="intro-kicker">CINTA RECUPERADA · REGISTRO 08</p>
-      <h1 id="intro-title" class="intro-title">PINE RIDGE</h1>
-      <p id="intro-copy" class="intro-copy">La última transmisión llegó desde el bosque a las 23:47. Después, solo quedó estática.</p>
-
-      <div class="intro-progress-wrap" aria-hidden="true">
-        <div class="intro-progress-track"><span id="intro-progress-fill"></span></div>
-        <div class="intro-progress-meta"><span id="intro-counter">ARCHIVO EN ESPERA</span><span>SEÑAL INESTABLE</span></div>
-      </div>
-
-      <div class="intro-actions">
-        <button id="btn-intro-play" class="intro-primary" type="button">▶ REPRODUCIR ARCHIVO</button>
-        <button id="btn-intro-skip" class="intro-secondary" type="button">OMITIR INTRODUCCIÓN</button>
-      </div>
-      <p class="intro-footnote">RECOMENDACIÓN: UTILIZA AUDÍFONOS · LA EXPERIENCIA CONTIENE SONIDOS REPENTINOS</p>
     </div>
   </section>
 
-  <!-- Contenedor del Escenario 3D / VR + HUD + Filtro VHS + Modales -->
-  <main id="app">
-    <!-- Capa Visual VHS / CRT Dinámica según Cordura -->
-    <div id="vhs-overlay" class="vhs-overlay">
-      <div class="vhs-rec" id="vhs-rec-text">● PLAY VHS-SP • 00:00:00</div>
-      <div class="vhs-tracking hidden" id="vhs-tracking">AUTO TRACKING</div>
-    </div>
+  <!-- Menú Principal -->
+  <main id="start-menu" class="overlay-screen hidden">
+    <div class="panel-box">
+      <p class="tag-red">ARCHIVO CONFIDENCIAL // VHS-1994</p>
+      <h1 class="game-title">SLENDER: THE 8 PAGES</h1>
 
-    <!-- Primer contacto: aviso cinematográfico en pantalla (en VR se muestra como panel 3D). -->
-    <div id="first-contact-card" class="first-contact-card hidden" aria-live="assertive" aria-hidden="true">
-      <span class="first-contact-kicker">REGISTRO VISUAL CONFIRMADO · 23:47</span>
-      <strong>PRIMER CONTACTO</strong>
-      <p>NO ES UN ÁRBOL. NO TE QUEDES MIRÁNDOLO.</p>
-      <span class="first-contact-footer">SEÑAL PERDIDA // PINE RIDGE</span>
-    </div>
-
-    <!-- HUD Superior con Notas, Zona, Tiempo, Batería, Stamina y Medidor de Ruido -->
-    <div id="hud-overlay" class="hud-top hidden">
-      <div class="hud-pill" id="hud-pages">NOTAS: 0 / 8</div>
-      <div class="hud-pill" id="hud-time">⏱️ 05:00</div>
-      <div class="hud-pill" id="hud-zone">ZONA: BOSQUE OSCURO</div>
-      <div class="hud-pill" id="hud-bat">🔋 BAT: 100%</div>
-      <div class="hud-pill" id="hud-stam">⚡ STAM: 100%</div>
-      <div class="hud-pill hud-signal" id="hud-signal" aria-live="polite">
-        <span>📡 RASTRO DE NOTA</span>
-        <strong id="hud-signal-text">BUSCANDO...</strong>
-        <span class="signal-track"><span id="hud-signal-fill"></span></span>
+      <div class="records-bar">
+        <div>NORMAL: <strong id="rec-normal">--:--</strong></div>
+        <div>PESADILLA: <strong id="rec-nightmare">--:--</strong></div>
       </div>
 
-      <!-- Medidor Visual de Ruido (Decibelímetro) -->
-      <div class="noise-meter-box" id="noise-box">
-        <div class="noise-header">
-          <span id="mic-icon">🎙️ RUIDO</span>
-          <span id="noise-status">SILENCIO</span>
-        </div>
-        <div class="noise-track">
-          <div id="noise-fill" class="noise-fill"></div>
-          <div class="noise-threshold" title="Umbral de detección de Slenderman"></div>
-        </div>
+      <div class="diff-row">
+        <button class="diff-btn active" data-diff="1.0">NORMAL</button>
+        <button class="diff-btn" data-diff="1.45">PESADILLA</button>
       </div>
-    </div>
+      <p id="mode-desc" class="mode-desc">
+        Sigue los senderos de piedra hacia el Cementerio, la Cabaña y el Altar. Recoge pilas, administra tu resistencia y si Slenderman aparece: <strong>APAGA LA LINTERNA Y MANTÉN EL MEDIDOR DE RUIDO EN VERDE</strong>.
+      </p>
 
-    <!-- Archivo de páginas recuperadas: tarjeta completa en PC y aviso equivalente en VR. -->
-    <div id="page-viewer" class="page-viewer hidden" aria-live="polite">
-      <section class="page-recovery-card">
-        <header class="page-recovery-header">
-          <span>▣ ARCHIVO CONFIDENCIAL // PINE RIDGE</span>
-          <strong id="page-viewer-count">PÁGINA 1 / 8 RECUPERADA</strong>
-        </header>
-        <div class="page-recovery-body">
-          <div class="page-current-document">
-            <canvas id="page-preview-cv" width="180" height="225"></canvas>
-            <p>DOCUMENTO ORIGINAL RECUPERADO</p>
-          </div>
-          <div class="page-collection-panel">
-            <div class="page-collection-title"><span>LAS OCHO NOTAS</span><strong id="page-collection-progress">ARCHIVO: 0 / 8</strong></div>
-            <div id="page-collection-grid" class="page-collection-grid">
-              <div class="page-slot" data-page-slot="1"><canvas width="52" height="66"></canvas><span>01</span><small class="page-slot-state">SIN DATOS</small></div>
-              <div class="page-slot" data-page-slot="2"><canvas width="52" height="66"></canvas><span>02</span><small class="page-slot-state">SIN DATOS</small></div>
-              <div class="page-slot" data-page-slot="3"><canvas width="52" height="66"></canvas><span>03</span><small class="page-slot-state">SIN DATOS</small></div>
-              <div class="page-slot" data-page-slot="4"><canvas width="52" height="66"></canvas><span>04</span><small class="page-slot-state">SIN DATOS</small></div>
-              <div class="page-slot" data-page-slot="5"><canvas width="52" height="66"></canvas><span>05</span><small class="page-slot-state">SIN DATOS</small></div>
-              <div class="page-slot" data-page-slot="6"><canvas width="52" height="66"></canvas><span>06</span><small class="page-slot-state">SIN DATOS</small></div>
-              <div class="page-slot" data-page-slot="7"><canvas width="52" height="66"></canvas><span>07</span><small class="page-slot-state">SIN DATOS</small></div>
-              <div class="page-slot" data-page-slot="8"><canvas width="52" height="66"></canvas><span>08</span><small class="page-slot-state">SIN DATOS</small></div>
-            </div>
-            <p class="page-warning">NO TE QUEDES MIRÁNDOLAS DEMASIADO TIEMPO.</p>
-          </div>
-        </div>
-      </section>
-    </div>
-
-    <!-- Menú de Inicio -->
-    <div id="start-menu" class="menu-overlay hidden">
-      <div class="menu-box">
-        <p class="menu-tag">EDICIÓN DE SUPERVIVENCIA • CINTA RECUPERADA 1994</p>
-        <div class="menu-title-mark" aria-hidden="true"><span>08</span><i></i><span>08</span></div>
-        <h2>¿SOBREVIVIRÁS AL BOSQUE?</h2>
-        <p class="menu-desc" id="mode-desc">
-          Sigue los senderos de piedra hacia el Cementerio, la Cabaña y el Altar.
-          Recoge pilas, administra tu resistencia y si Slenderman aparece:
-          <strong>APAGA LA LINTERNA Y MANTÉN EL MEDIDOR DE RUIDO EN VERDE</strong>.
-        </p>
-
-        <div class="mission-briefing">
-          <div class="briefing-heading"><span>▣ REGISTRO DE CAMPO</span><span>24·10·1994</span></div>
-          <p>La cámara dejó de transmitir cerca de Pine Ridge. Ocho notas siguen dispersas entre el cementerio, la cabaña y el altar. Si escuchas pasos detrás de ti, no mires demasiado tiempo.</p>
-          <div class="briefing-tags"><span>8 NOTAS</span><span>1 BOSQUE</span><span>0 GARANTÍAS</span></div>
-        </div>
-
-        <div class="records-bar">
-          <span>🏆 RÉCORD NORMAL: <strong id="rec-normal">--:--</strong></span>
-          <span>💀 RÉCORD PESADILLA: <strong id="rec-nightmare">--:--</strong></span>
-        </div>
-
-        <div class="diff-selector">
-          <button type="button" class="diff-btn active" data-diff="1">NORMAL (05:00)</button>
-          <button type="button" class="diff-btn" data-diff="1.35">💀 PESADILLA (03:00)</button>
-        </div>
-
-        <div class="menu-actions">
-          <button id="btn-start-pc" type="button" class="btn-play">▶ INICIAR LA GRABACIÓN</button>
-          <button id="btn-replay-intro" type="button" class="archive-replay-btn">VER INTRODUCCIÓN</button>
-          <div id="enter"></div>
-        </div>
-
-        <details class="audio-settings">
-          <summary>⚙ CONFIGURACIÓN DE SONIDO</summary>
-          <div class="audio-mixer">
-            <label class="audio-control" for="music-volume">
-              <span><b>BANDA SONORA</b><output id="music-volume-value">58%</output></span>
-              <input id="music-volume" type="range" min="0" max="100" value="58" step="1">
-            </label>
-            <label class="audio-control" for="ambience-volume">
-              <span><b>AMBIENTE DEL BOSQUE</b><output id="ambience-volume-value">48%</output></span>
-              <input id="ambience-volume" type="range" min="0" max="100" value="48" step="1">
-            </label>
-            <label class="audio-control" for="effects-volume">
-              <span><b>EFECTOS Y VOCES</b><output id="effects-volume-value">68%</output></span>
-              <input id="effects-volume" type="range" min="0" max="100" value="68" step="1">
-            </label>
-            <div class="audio-actions">
-              <button id="btn-audio-preview" class="audio-small-btn" type="button">♫ PROBAR AUDIO</button>
-              <button id="btn-audio-mute" class="audio-small-btn" type="button" aria-pressed="false">SILENCIAR TODO</button>
-            </div>
-            <p id="audio-status" class="audio-status" aria-live="polite">MEZCLA PREPARADA · EL AUDIO SE ACTIVA AL INICIAR</p>
-          </div>
-        </details>
-
-        <details class="advanced-settings">
-          <summary>▣ OPCIONES DE EXPERIENCIA Y RENDIMIENTO</summary>
-          <div class="advanced-settings-grid">
-            <label class="setting-control" for="graphics-quality">
-              <span>CALIDAD GRÁFICA</span>
-              <select id="graphics-quality">
-                <option value="performance">RENDIMIENTO · VR LIGERO</option>
-                <option value="balanced" selected>EQUILIBRADO · RECOMENDADO</option>
-                <option value="quality">CALIDAD · PC</option>
-              </select>
-            </label>
-            <label class="setting-check" for="reduced-motion">
-              <input id="reduced-motion" type="checkbox">
-              <span>REDUCIR INTERFERENCIAS Y MOVIMIENTO DE PANTALLA</span>
-            </label>
-            <label class="setting-check" for="microphone-enabled">
-              <input id="microphone-enabled" type="checkbox" checked>
-              <span>USAR MICRÓFONO PARA DETECTAR RUIDO (OPCIONAL)</span>
-            </label>
-          </div>
-          <p id="settings-status" class="audio-status" aria-live="polite">PERFIL EQUILIBRADO PREPARADO PARA META QUEST 3S.</p>
-        </details>
-        <p class="audio-credit">BANDA SONORA ORIGINAL GENERADA EN TIEMPO REAL · SIN ARCHIVOS MUSICALES EXTERNOS</p>
-        <span class="hint">[ WASD: MOVER • SHIFT: CORRER • FLECHAS ◄►: GIRAR • F: LINTERNA • ESC: PAUSA ]</span>
+      <div class="btn-row">
+        <button id="btn-start-pc" class="btn-primary">▶ JUGAR AHORA</button>
+        <button id="btn-mobile-vr" class="btn-secondary">🥽 MÓVIL VR (CARDBOARD)</button>
+        <div id="enter"></div>
+        <button id="btn-replay-intro" class="btn-secondary">VER CINTA</button>
       </div>
-    </div>
 
-    <!-- Expediente cinematográfico de victoria / derrota -->
-    <div id="end-screen" class="menu-overlay end-screen hidden" role="dialog" aria-modal="true" aria-labelledby="end-title" data-result="defeat">
-      <div class="menu-box end-box">
-        <div class="end-topline">
-          <span id="end-case-code">PINE RIDGE // EXPEDIENTE 08</span>
-          <span class="end-rec-mark"><i></i> ARCHIVO CERRADO</span>
+      <!-- Configuración rápida -->
+      <details class="settings-box">
+        <summary>⚙ AJUSTES DE AUDIO Y RENDIMIENTO</summary>
+        <div class="settings-grid">
+          <label>Música <output id="music-volume-value">58%</output>
+            <input id="music-volume" type="range" min="0" max="100" value="58" />
+          </label>
+          <label>Ambiente <output id="ambience-volume-value">48%</output>
+            <input id="ambience-volume" type="range" min="0" max="100" value="48" />
+          </label>
+          <label>Efectos <output id="effects-volume-value">68%</output>
+            <input id="effects-volume" type="range" min="0" max="100" value="68" />
+          </label>
+          <label>Gráficos
+            <select id="graphics-quality">
+              <option value="performance">RENDIMIENTO (MÓVIL)</option>
+              <option value="balanced" selected>EQUILIBRADO</option>
+              <option value="quality">CALIDAD ALTA</option>
+            </select>
+          </label>
+          <label class="check-label">
+            <input id="microphone-enabled" type="checkbox" checked /> Micrófono (detección de ruido)
+          </label>
+          <label class="check-label">
+            <input id="reduced-motion" type="checkbox" /> Reducir vibración VHS
+          </label>
         </div>
-        <p class="menu-tag end-tag" id="end-tag">FIN DE LA PARTIDA</p>
-        <h2 id="end-title">TE ATRAPÓ...</h2>
-        <p id="end-subtitle" class="end-subtitle">La señal terminó. El bosque conserva el resto de la historia.</p>
-
-        <div class="end-rank-panel">
-          <div class="end-rank-copy">
-            <span>CLASIFICACIÓN DE SUPERVIVENCIA</span>
-            <strong id="end-rank">SEÑAL DESAPARECIDA</strong>
-            <small id="end-difficulty">DIFICULTAD NORMAL</small>
-          </div>
-          <div class="end-score-block">
-            <span>PUNTUACIÓN</span>
-            <strong id="end-score">0000</strong>
-            <small>PTS</small>
-          </div>
+        <div class="btn-row small-gap">
+          <button id="btn-audio-mute" class="btn-secondary" aria-pressed="false">SILENCIAR TODO</button>
+          <button id="btn-audio-preview" class="btn-secondary">PROBAR SONIDO</button>
         </div>
-
-        <div class="end-archive-block">
-          <div class="end-archive-heading"><span>ARCHIVO DE LAS OCHO NOTAS</span><strong id="end-archive-count">0 / 8 RECUPERADAS</strong></div>
-          <span id="st-pages" hidden>0 / 8</span>
-          <div id="end-page-grid" class="end-page-grid" aria-label="Progreso final de las ocho páginas">
-            <span class="end-page-slot" data-result-page="1">01</span>
-            <span class="end-page-slot" data-result-page="2">02</span>
-            <span class="end-page-slot" data-result-page="3">03</span>
-            <span class="end-page-slot" data-result-page="4">04</span>
-            <span class="end-page-slot" data-result-page="5">05</span>
-            <span class="end-page-slot" data-result-page="6">06</span>
-            <span class="end-page-slot" data-result-page="7">07</span>
-            <span class="end-page-slot" data-result-page="8">08</span>
-          </div>
-        </div>
-
-        <div class="stats-grid end-stats-grid">
-          <div class="stat-item"><span>TIEMPO EN EL BOSQUE</span><strong id="st-time">00:00</strong></div>
-          <div class="stat-item"><span>VECES ESCUCHADO</span><strong id="st-heard">0</strong></div>
-          <div class="stat-item"><span>DISTANCIA RECORRIDA</span><strong id="st-dist">0 m</strong></div>
-          <div class="stat-item"><span>BATERÍA RESTANTE</span><strong id="st-battery">100%</strong></div>
-          <div class="stat-item"><span>CORDURA FINAL</span><strong id="st-sanity">100%</strong></div>
-          <div class="stat-item"><span>MEJOR PUNTUACIÓN</span><strong id="end-best-score">0</strong></div>
-        </div>
-
-        <p class="menu-desc end-record-message" id="end-record-msg" aria-live="polite"></p>
-        <div class="menu-actions end-actions">
-          <button id="btn-end-restart" type="button" class="btn-play">↻ REINTENTAR</button>
-          <button id="btn-retry" type="button" class="archive-replay-btn">VOLVER AL MENÚ</button>
-        </div>
-        <p class="end-footer">EXPEDIENTE GENERADO LOCALMENTE · VHS-SP 1994</p>
-      </div>
-    </div>
-
-    <!-- Menú de pausa para PC; en VR se muestra un panel 3D dentro de la escena. -->
-    <div id="pause-screen" class="menu-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="pause-title">
-      <div class="menu-box pause-box">
-        <p class="menu-tag">SEÑAL INTERRUMPIDA • VHS-1994</p>
-        <h2 id="pause-title">PARTIDA EN PAUSA</h2>
-        <p class="menu-desc">La actividad del juego está detenida. Selecciona cómo continuar.</p>
-        <div class="pause-options">
-          <button id="btn-pause-resume" class="btn-play pause-option active" type="button" data-pause-action="resume">CONTINUAR</button>
-          <button id="btn-pause-restart" class="btn-play pause-option" type="button" data-pause-action="restart">REINICIAR PARTIDA</button>
-          <button id="btn-pause-menu" class="btn-play pause-option" type="button" data-pause-action="menu">VOLVER AL MENÚ</button>
-        </div>
-        <span class="hint">VR: JOYSTICK IZQ. PARA NAVEGAR • A / X PARA CONFIRMAR • B / Y PARA VOLVER</span>
-      </div>
+        <p id="audio-status" class="muted-small"></p>
+        <p id="settings-status" class="muted-small"></p>
+      </details>
     </div>
   </main>
 
-  <!-- Tarjetas de Instrucciones e Integrantes -->
-  <section class="cards">
-    <div class="card">
-      <h2>🎙️ MECÁNICAS DE SUPERVIVENCIA Y CONTROLES</h2>
-      <table class="controls-table">
-        <thead>
-          <tr>
-            <th>ACCIÓN</th>
-            <th>META QUEST 3S</th>
-            <th>PC</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>CAMINAR / DESPLAZARSE</td>
-            <td>JOYSTICK IZQUIERDO</td>
-            <td>W A S D</td>
-          </tr>
-          <tr>
-            <td>GIRAR CÁMARA</td>
-            <td>JOYSTICK DERECHO</td>
-            <td>FLECHAS ◄ / ►</td>
-          </tr>
-          <tr>
-            <td>CORRER</td>
-            <td>GATILLO IZQUIERDO</td>
-            <td>SHIFT</td>
-          </tr>
-          <tr>
-            <td>LINTERNA (BATERÍA)</td>
-            <td>PULSAR JOYSTICK DERECHO</td>
-            <td>TECLA F</td>
-          </tr>
-          <tr>
-            <td>INTERACTUAR / RECOGER</td>
-            <td>GATILLO DERECHO</td>
-            <td>ACERCARSE Y MIRAR</td>
-          </tr>
-          <tr>
-            <td>AGARRAR OBJETOS</td>
-            <td>GRIP IZQUIERDO O DERECHO</td>
-            <td>ACERCARSE Y MIRAR</td>
-          </tr>
-          <tr>
-            <td>CONFIRMAR / SELECCIONAR</td>
-            <td>A (DERECHO) / X (IZQUIERDO)</td>
-            <td>ENTER</td>
-          </tr>
-          <tr>
-            <td>VOLVER / CANCELAR</td>
-            <td>B (DERECHO) / Y (IZQUIERDO)</td>
-            <td>BACKSPACE</td>
-          </tr>
-          <tr>
-            <td>PAUSAR / REANUDAR</td>
-            <td>MENÚ IZQUIERDO</td>
-            <td>ESC</td>
-          </tr>
-          <tr>
-            <td>EVADIR A SLENDERMAN</td>
-            <td>APAGAR LUZ + MANTENER SILENCIO</td>
-            <td>TECLA F + NO HABLAR</td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="hint controls-note">El botón Meta del mando derecho pertenece al sistema del visor y no se utiliza como botón del videojuego.</p>
+  <!-- HUD en Partida -->
+  <div id="hud-overlay" class="hidden">
+    <div class="hud-top">
+      <div class="hud-stats">
+        <span id="hud-pages">NOTAS: 0 / 8</span>
+        <span id="hud-time">⏱️ 05:00</span>
+        <span id="hud-zone">ZONA: BOSQUE OSCURO</span>
+        <span id="hud-bat">🔋 BAT: 100%</span>
+        <span id="hud-stam">⚡ STAM: 100%</span>
+      </div>
+      <div class="hud-actions-top">
+        <button id="btn-hud-flash" class="hud-mini-btn" title="Linterna">🔦</button>
+        <button id="btn-hud-pause" class="hud-mini-btn" title="Pausa">❚❚</button>
+      </div>
     </div>
 
-    <div class="card">
-      <h2>👥 INTEGRANTES DEL EQUIPO</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>NOMBRE DEL ALUMNO</th>
-            <th>NO. CONTROL</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>Juan Pablo Sánchez García</td>
-            <td>24200101</td>
-          </tr>
-          <tr>
-            <td>Eduardo Zenil Guerrero</td>
-            <td>25200365</td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="hint" style="margin-top: 14px;">
-        ING. EN SISTEMAS COMPUTACIONALES • GRAFICACIÓN VR 3.7
-      </p>
+    <div class="hud-meters">
+      <div id="hud-signal" class="meter-box">
+        <span id="hud-signal-text">BUSCANDO... ▲</span>
+        <div class="meter-bar"><div id="hud-signal-fill"></div></div>
+      </div>
+      <div id="noise-box" class="meter-box">
+        <span id="noise-status">SILENCIO</span>
+        <div class="meter-bar"><div id="noise-fill"></div></div>
+      </div>
+    </div>
+
+    <!-- Alerta de primer contacto -->
+    <div id="first-contact-card" class="hidden" aria-hidden="true">
+      <strong>PRIMER CONTACTO</strong>
+      <span>NO ES UN ÁRBOL. APAGA LA LINTERNA Y NO LO MIRES.</span>
+    </div>
+
+    <!-- Visor de página recién recogida -->
+    <div id="page-viewer" class="hidden">
+      <canvas id="page-preview-cv" width="128" height="160"></canvas>
+      <p id="page-viewer-count">PÁGINA 1 / 8 RECOGIDA</p>
+    </div>
+
+    <!-- Archivo de páginas -->
+    <div id="page-collection-bar">
+      <span id="page-collection-progress">ARCHIVO: 0 / 8</span>
+      <div class="page-slots-row">
+        <div class="page-slot"><canvas width="32" height="40"></canvas><span class="page-slot-state">SIN DATOS</span></div>
+        <div class="page-slot"><canvas width="32" height="40"></canvas><span class="page-slot-state">SIN DATOS</span></div>
+        <div class="page-slot"><canvas width="32" height="40"></canvas><span class="page-slot-state">SIN DATOS</span></div>
+        <div class="page-slot"><canvas width="32" height="40"></canvas><span class="page-slot-state">SIN DATOS</span></div>
+        <div class="page-slot"><canvas width="32" height="40"></canvas><span class="page-slot-state">SIN DATOS</span></div>
+        <div class="page-slot"><canvas width="32" height="40"></canvas><span class="page-slot-state">SIN DATOS</span></div>
+        <div class="page-slot"><canvas width="32" height="40"></canvas><span class="page-slot-state">SIN DATOS</span></div>
+        <div class="page-slot"><canvas width="32" height="40"></canvas><span class="page-slot-state">SIN DATOS</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Controles Táctiles para Teléfono / Tablet -->
+  <div id="touch-hud" class="hidden">
+    <div id="touch-joystick" aria-label="Mover personaje">
+      <div id="touch-joystick-knob"></div>
+    </div>
+    <div class="touch-look-hint">DESLIZA AQUÍ PARA MIRAR</div>
+    <div class="touch-buttons">
+      <button id="btn-touch-interact" class="touch-btn action-take">TOMAR</button>
+      <button id="btn-touch-flash" class="touch-btn">LUZ</button>
+      <button id="btn-touch-sprint" class="touch-btn">CORRER</button>
+      <button id="btn-touch-pause" class="touch-btn small-btn">❚❚</button>
+    </div>
+  </div>
+
+  <!-- Botón para salir de Móvil VR -->
+  <button id="btn-exit-mobile-vr" class="hud-mini-btn hidden">✕ SALIR VR MÓVIL</button>
+
+  <!-- Pantalla de Pausa -->
+  <section id="pause-screen" class="overlay-screen hidden">
+    <div class="panel-box compact-box">
+      <p class="tag-red">SEÑAL INTERRUMPIDA • VHS-1994</p>
+      <h2>PARTIDA EN PAUSA</h2>
+      <div class="pause-list">
+        <button class="pause-option active">CONTINUAR</button>
+        <button class="pause-option">REINICIAR PARTIDA</button>
+        <button class="pause-option">VOLVER AL MENÚ</button>
+      </div>
     </div>
   </section>
 
-  <script type="module" src="./assets/js/main.js?v=10"></script>
+  <!-- Pantalla Final -->
+  <section id="end-screen" class="overlay-screen hidden">
+    <div class="panel-box">
+      <p id="end-tag" class="tag-red">EXPEDIENTE</p>
+      <h2 id="end-title">FIN DE LA TRANSMISIÓN</h2>
+      <p id="end-subtitle" class="mode-desc"></p>
+      <p id="end-case-code" class="muted-small"></p>
+
+      <div class="end-summary">
+        <div>RANGO: <strong id="end-rank">--</strong></div>
+        <div>PUNTUACIÓN: <strong id="end-score">0000</strong></div>
+        <div>MEJOR PUNTUACIÓN: <strong id="end-best-score">0000</strong></div>
+        <div id="end-difficulty">DIFICULTAD: NORMAL</div>
+      </div>
+
+      <div class="end-stats-grid">
+        <div>NOTAS: <strong id="st-pages">0 / 8</strong></div>
+        <div>TIEMPO: <strong id="st-time">00:00</strong></div>
+        <div>ESCUCHADO: <strong id="st-heard">0</strong></div>
+        <div>DISTANCIA: <strong id="st-dist">0 m</strong></div>
+        <div>BATERÍA: <strong id="st-battery">0%</strong></div>
+        <div>CORDURA: <strong id="st-sanity">0%</strong></div>
+      </div>
+
+      <p id="end-archive-count" class="muted-small"></p>
+      <div class="end-slots-row">
+        <span class="end-page-slot">1</span>
+        <span class="end-page-slot">2</span>
+        <span class="end-page-slot">3</span>
+        <span class="end-page-slot">4</span>
+        <span class="end-page-slot">5</span>
+        <span class="end-page-slot">6</span>
+        <span class="end-page-slot">7</span>
+        <span class="end-page-slot">8</span>
+      </div>
+      <p id="end-record-msg" class="record-banner"></p>
+
+      <div class="btn-row">
+        <button id="btn-end-restart" class="btn-primary">↻ JUGAR DE NUEVO</button>
+        <button id="btn-retry" class="btn-secondary">MENÚ PRINCIPAL</button>
+      </div>
+    </div>
+  </section>
+
+  <script type="module" src="./assets/js/main.js"></script>
 </body>
 </html>

@@ -1,12 +1,17 @@
 import * as THREE from 'three';
 import {VRButton} from 'three/addons/webxr/VRButton.js';
+import {StereoEffect} from 'three/addons/effects/StereoEffect.js';
 
-/* ================= Configuración Slenderman: Edición Completa 8-Bits VR (Optimizada) ================= */
-const MAP_R = 72;               // Límite perimetral del mapa
-const TOTAL_PAGES = 8;          // Las 8 páginas clásicas
-const WALK_SPEED = 3.3;         // Velocidad caminando
-const SPRINT_SPEED = 5.4;       // Velocidad esprintando
+/* ================= Configuración Slenderman: Edición Multi-Plataforma (PC + WebXR + Móvil + Móvil VR) ================= */
+const MAP_R = 72;
+const TOTAL_PAGES = 8;
+const WALK_SPEED = 3.3;
+const SPRINT_SPEED = 5.4;
 const rand = (a,b)=>a+Math.random()*(b-a);
+
+function isMobileDevice(){
+  return window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window || window.innerWidth <= 900;
+}
 
 // Almacenamiento seguro con respaldo en memoria
 const memoryStorage = {};
@@ -49,7 +54,7 @@ function loadAudioPrefs(){
 let audioPrefs = loadAudioPrefs();
 
 const GAME_SETTINGS_KEY = 'slender_game_settings_v2';
-const DEFAULT_GAME_SETTINGS = { quality: 'balanced', reducedMotion: false, microphone: true };
+const DEFAULT_GAME_SETTINGS = { quality: isMobileDevice() ? 'performance' : 'balanced', reducedMotion: false, microphone: true };
 function loadGameSettings(){
   try{
     const saved = JSON.parse(storageGet(GAME_SETTINGS_KEY) || '{}');
@@ -97,6 +102,85 @@ const baseFogDensity = 0.056;
 scene.fog = new THREE.FogExp2(0x020103, baseFogDensity);
 const camera = new THREE.PerspectiveCamera(70, app.clientWidth/app.clientHeight, 0.05, 150);
 camera.position.y = 1.6;
+
+/* ================= Soporte Móvil VR (Cardboard / Estereoscópico + Giroscopio Nativo) ================= */
+let mobileVrActive = false;
+let stereoEffect = null;
+const gyroState = { alpha: 0, beta: 0, gamma: 0, orient: 0, active: false };
+const _zee = new THREE.Vector3(0, 0, 1);
+const _euler = new THREE.Euler();
+const _q0 = new THREE.Quaternion();
+const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+
+window.addEventListener('deviceorientation', (e)=>{
+  if(e.alpha === null) return;
+  gyroState.alpha = e.alpha;
+  gyroState.beta = e.beta;
+  gyroState.gamma = e.gamma;
+  gyroState.orient = (screen.orientation?.angle ?? window.orientation ?? 0);
+  gyroState.active = true;
+}, true);
+
+function updateGyroCamera(){
+  if(!gyroState.active) return;
+  const alpha = THREE.MathUtils.degToRad(gyroState.alpha);
+  const beta  = THREE.MathUtils.degToRad(gyroState.beta);
+  const gamma = THREE.MathUtils.degToRad(gyroState.gamma);
+  const orient = THREE.MathUtils.degToRad(gyroState.orient);
+  _euler.set(beta, alpha, -gamma, 'YXZ');
+  camera.quaternion.setFromEuler(_euler);
+  camera.quaternion.multiply(_q1);
+  camera.quaternion.multiply(_q0.setFromAxisAngle(_zee, -orient));
+}
+
+async function enterMobileFullscreen(){
+  if(!isMobileDevice()) return;
+  try{
+    if(!document.fullscreenElement && document.documentElement.requestFullscreen){
+      await document.documentElement.requestFullscreen();
+    }
+    if(screen.orientation && screen.orientation.lock){
+      await screen.orientation.lock('landscape');
+    }
+  }catch{}
+}
+
+async function enterMobileVR(){
+  if(typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function'){
+    try{
+      const perm = await DeviceOrientationEvent.requestPermission();
+      if(perm !== 'granted'){
+        alert('Debes permitir el acceso al giroscopio para usar Móvil VR.');
+        return;
+      }
+    }catch{}
+  }
+  if(!stereoEffect){
+    stereoEffect = new StereoEffect(renderer);
+    stereoEffect.setEyeSeparation(0.064);
+  }
+  stereoEffect.setSize(app.clientWidth, app.clientHeight);
+  await enterMobileFullscreen();
+  mobileVrActive = true;
+  flashRig.position.set(0.22, -0.20, -0.35);
+  camera.add(flashRig);
+  startGameFromMenu(true);
+  touchHudEl?.classList.add('hidden');
+  document.getElementById('btn-exit-mobile-vr')?.classList.remove('hidden');
+}
+
+function exitMobileVR(){
+  if(!mobileVrActive) return;
+  mobileVrActive = false;
+  document.getElementById('btn-exit-mobile-vr')?.classList.add('hidden');
+  resizeRendererToApp();
+  if(isMobileDevice() && playing && !paused){
+    touchHudEl?.classList.remove('hidden');
+  }
+}
+
+document.getElementById('btn-mobile-vr')?.addEventListener('click', enterMobileVR);
+document.getElementById('btn-exit-mobile-vr')?.addEventListener('click', exitMobileVR);
 
 // Panel de pausa 3D
 const pauseMenuCanvas = document.createElement('canvas');
@@ -162,6 +246,7 @@ function resizeRendererToApp(){
   const width = Math.max(1, app.clientWidth);
   const height = Math.max(1, app.clientHeight);
   renderer.setSize(width, height, false);
+  if(stereoEffect) stereoEffect.setSize(width, height);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
 }
@@ -179,7 +264,8 @@ let firstEncounterShown = false, firstEncounterTimer = 0;
 let diffMultiplier = 1.0;
 const isNightmare = () => diffMultiplier > 1.1;
 
-let screamerTimer = 0, nextTpTimer = 7, flashlightOn = true, flashFailTimer = 0;
+let screamerTimer = 0, nearScreamCooldown = 0, nextTpTimer = 7, flashlightOn = true, flashFailTimer = 0;
+let pendingDefeatReason = null;
 let invertControlsTimer = 0;
 let lightningTimer = 9, lightningFlash = 0;
 let currentZone = 'BOSQUE OSCURO';
@@ -255,7 +341,7 @@ floor.matrixAutoUpdate = false;
 floor.updateMatrix();
 scene.add(floor);
 
-const skyMat = new THREE.MeshBasicMaterial({side:THREE.BackSide, fog:false, depthWrite:false});
+const skyMat = new THREE.MeshBasicMaterial({side:THREE.BackSide, fog:false, depthWrite:false, color:0xffffff});
 function paintSky(bloodMoon){
   if(skyMat.map) skyMat.map.dispose();
   skyMat.map = pixelTex(256,128,(g,w,h)=>{
@@ -275,7 +361,7 @@ skyDome.matrixAutoUpdate = false;
 skyDome.updateMatrix();
 scene.add(skyDome);
 
-/* ================= Partículas Flotantes (Luciérnagas, Cenizas y Niebla Baja) ================= */
+/* ================= Partículas Flotantes ================= */
 const PARTICLE_COUNT = 180;
 let activeParticleCount = QUALITY_PRESETS[gameSettings.quality].particleCount;
 const pGeo = new THREE.BufferGeometry();
@@ -297,17 +383,11 @@ function resetParticles(isBloodPhase){
     const nearAltar = Math.hypot(px, pz - 42) < 18;
     const nearCem   = Math.hypot(px - 34, pz + 34) < 20;
     if(isBloodPhase || nearAltar){
-      pColors[i*3]   = 1.0;
-      pColors[i*3+1] = 0.12;
-      pColors[i*3+2] = 0.22;
+      pColors[i*3]   = 1.0; pColors[i*3+1] = 0.12; pColors[i*3+2] = 0.22;
     } else if(nearCem){
-      pColors[i*3]   = 0.55;
-      pColors[i*3+1] = 0.65;
-      pColors[i*3+2] = 0.85;
+      pColors[i*3]   = 0.55; pColors[i*3+1] = 0.65; pColors[i*3+2] = 0.85;
     } else {
-      pColors[i*3]   = 0.55;
-      pColors[i*3+1] = 0.95;
-      pColors[i*3+2] = 0.45;
+      pColors[i*3]   = 0.55; pColors[i*3+1] = 0.95; pColors[i*3+2] = 0.45;
     }
   }
   pGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
@@ -317,17 +397,9 @@ function resetParticles(isBloodPhase){
 }
 resetParticles(false);
 
-const pTex = pixelTex(8, 8, (g)=>{
-  g.fillStyle = '#ffffff';
-  g.fillRect(2, 2, 4, 4);
-});
+const pTex = pixelTex(8, 8, (g)=>{ g.fillStyle = '#ffffff'; g.fillRect(2, 2, 4, 4); });
 const pMat = new THREE.PointsMaterial({
-  size: 0.16,
-  map: pTex,
-  vertexColors: true,
-  transparent: true,
-  opacity: 0.75,
-  depthWrite: false
+  size: 0.16, map: pTex, vertexColors: true, transparent: true, opacity: 0.75, depthWrite: false
 });
 const floatingParticles = new THREE.Points(pGeo, pMat);
 floatingParticles.frustumCulled = false;
@@ -347,7 +419,7 @@ function updateParticles(t, dt){
   pGeo.attributes.position.needsUpdate = true;
 }
 
-/* ================= Lluvia Nocturna Sutil (Partículas Verticales) ================= */
+/* ================= Lluvia Nocturna ================= */
 const RAIN_COUNT = 260;
 let activeRainCount = QUALITY_PRESETS[gameSettings.quality].rainCount;
 const rainGeo = new THREE.BufferGeometry();
@@ -359,10 +431,7 @@ for(let i=0; i<RAIN_COUNT; i++){
 }
 rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
 rainGeo.setDrawRange(0, activeRainCount);
-const rainTex = pixelTex(4, 16, (g)=>{
-  g.fillStyle = 'rgba(160, 180, 210, 0.55)';
-  g.fillRect(1, 0, 2, 16);
-});
+const rainTex = pixelTex(4, 16, (g)=>{ g.fillStyle = 'rgba(160, 180, 210, 0.55)'; g.fillRect(1, 0, 2, 16); });
 const rainMesh = new THREE.Points(rainGeo, new THREE.PointsMaterial({
   size: 0.22, map: rainTex, transparent: true, opacity: 0.42, depthWrite: false
 }));
@@ -382,17 +451,14 @@ function updateRain(dt){
   rainGeo.attributes.position.needsUpdate = true;
 }
 
-/* ================= Huellas de Pasos en la Tierra ================= */
+/* ================= Huellas de Pasos ================= */
 const FOOTPRINT_MAX = 40;
 const footprintPool = [];
-let footprintIdx = 0;
-let stepAccum = 0;
-let leftFootNext = true;
+let footprintIdx = 0, stepAccum = 0, leftFootNext = true;
 
 const footTex = pixelTex(16, 24, (g)=>{
   g.fillStyle = 'rgba(18, 12, 8, 0.92)';
-  g.fillRect(4, 2, 8, 12);
-  g.fillRect(5, 16, 6, 6);
+  g.fillRect(4, 2, 8, 12); g.fillRect(5, 16, 6, 6);
 });
 const footGeo = new THREE.PlaneGeometry(0.18, 0.28);
 footGeo.rotateX(-Math.PI / 2);
@@ -410,10 +476,8 @@ for(let i=0; i<FOOTPRINT_MAX; i++){
 function spawnFootprint(worldPos, headingY){
   const fp = footprintPool[footprintIdx];
   footprintIdx = (footprintIdx + 1) % FOOTPRINT_MAX;
-
   const sideOffset = leftFootNext ? -0.14 : 0.14;
   leftFootNext = !leftFootNext;
-
   fp.mesh.position.set(
     worldPos.x + Math.cos(headingY) * sideOffset,
     0.015,
@@ -430,29 +494,22 @@ function updateFootprints(dt){
     const fp = footprintPool[i];
     if(fp.life > 0){
       fp.life -= dt * 0.028;
-      if(fp.life <= 0){
-        fp.life = 0;
-        fp.mesh.visible = false;
-      } else {
-        fp.mesh.material.opacity = fp.life * 0.72;
-      }
+      if(fp.life <= 0){ fp.life = 0; fp.mesh.visible = false; }
+      else { fp.mesh.material.opacity = fp.life * 0.72; }
     }
   }
 }
 
 function clearFootprints(){
-  for(const fp of footprintPool){
-    fp.life = 0;
-    fp.mesh.visible = false;
-  }
+  for(const fp of footprintPool){ fp.life = 0; fp.mesh.visible = false; }
   stepAccum = 0;
 }
 
-/* ================= Iluminación + Linterna 3D Visible ================= */
+/* ================= Iluminación + Linterna 3D ================= */
 const hemi = new THREE.HemisphereLight(0x141220, 0x030304, 0.07);
 scene.add(hemi);
 
-const lightningLight = new THREE.DirectionalLight(0x99bbff, 0);
+const lightningLight = new THREE.DirectionalLight(0xaaccff, 0);
 lightningLight.position.set(10, 40, -10);
 scene.add(lightningLight);
 
@@ -497,7 +554,7 @@ const vrPromptTex = pixelTex(128, 32, (g, w, h)=>{
   g.font = 'bold 11px monospace';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.fillText('[GATILLO DER / A]', w / 2, h / 2);
+  g.fillText('[GATILLO / TOCAR]', w / 2, h / 2);
 });
 const vrPromptSprite = new THREE.Sprite(
   new THREE.SpriteMaterial({map: vrPromptTex, transparent: true, depthTest: false})
@@ -507,7 +564,7 @@ vrPromptSprite.renderOrder = 995;
 vrPromptSprite.visible = false;
 scene.add(vrPromptSprite);
 
-/* ================= Construcción Optimizada con InstancedMesh (Bajo Draw Calls) ================= */
+/* ================= Construcción del Escenario ================= */
 const colliders = [];
 const hidingSpots = [];
 const _dummy = new THREE.Object3D();
@@ -535,7 +592,7 @@ const woodWallM = new THREE.MeshLambertMaterial({color:0x2e1d12});
 const fenceM = new THREE.MeshLambertMaterial({color:0x241710});
 const pathStoneM = new THREE.MeshLambertMaterial({color:0x2c2c34});
 
-// --- CERCO PERIMETRAL DEL MAPA (InstancedMesh) ---
+// Cerco perimetral
 const fencePosts = 56;
 const postInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.35, 2.4, 0.35), fenceM, fencePosts);
 const railInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 0.14, 1), fenceM, fencePosts * 2);
@@ -566,11 +623,9 @@ for(let i=0; i<fencePosts; i++){
 }
 scene.add(postInst, railInst);
 
-// --- ESCENARIO 1: EL CEMENTERIO ANTIGUO (Noreste) ---
+// Cementerio
 const cemCenter = {x: 34, z: -34};
-const tombTransforms = [];
-const crossVTransforms = [];
-const crossHTransforms = [];
+const tombTransforms = [], crossVTransforms = [], crossHTransforms = [];
 
 for(let gx = -15; gx <= 15; gx += 5){
   for(let gz = -15; gz <= 15; gz += 5){
@@ -592,10 +647,7 @@ for(let gx = -15; gx <= 15; gx += 5){
 if(tombTransforms.length){
   const tombInst = new THREE.InstancedMesh(new THREE.BoxGeometry(.85, 1.35, .28), stoneM, tombTransforms.length);
   tombTransforms.forEach((p, idx)=>{
-    _dummy.position.set(p.x, p.y, p.z);
-    _dummy.rotation.set(0, 0, 0);
-    _dummy.scale.set(1, 1, 1);
-    _dummy.updateMatrix();
+    _dummy.position.set(p.x, p.y, p.z); _dummy.rotation.set(0, 0, 0); _dummy.scale.set(1, 1, 1); _dummy.updateMatrix();
     tombInst.setMatrixAt(idx, _dummy.matrix);
   });
   scene.add(tombInst);
@@ -604,13 +656,9 @@ if(crossVTransforms.length){
   const cVInst = new THREE.InstancedMesh(new THREE.BoxGeometry(.18, 1.7, .18), crossM, crossVTransforms.length);
   const cHInst = new THREE.InstancedMesh(new THREE.BoxGeometry(.9, .18, .18), crossM, crossHTransforms.length);
   crossVTransforms.forEach((p, idx)=>{
-    _dummy.position.set(p.x, p.y, p.z);
-    _dummy.rotation.set(0, 0, 0);
-    _dummy.scale.set(1, 1, 1);
-    _dummy.updateMatrix();
+    _dummy.position.set(p.x, p.y, p.z); _dummy.rotation.set(0, 0, 0); _dummy.scale.set(1, 1, 1); _dummy.updateMatrix();
     cVInst.setMatrixAt(idx, _dummy.matrix);
-    _dummy.position.y = crossHTransforms[idx].y;
-    _dummy.updateMatrix();
+    _dummy.position.y = crossHTransforms[idx].y; _dummy.updateMatrix();
     cHInst.setMatrixAt(idx, _dummy.matrix);
   });
   scene.add(cVInst, cHInst);
@@ -618,14 +666,13 @@ if(crossVTransforms.length){
 
 const mausoleum = new THREE.Mesh(new THREE.BoxGeometry(4.2, 3.2, 4.2), darkStoneM);
 mausoleum.position.set(cemCenter.x, 1.6, cemCenter.z);
-mausoleum.matrixAutoUpdate = false;
-mausoleum.updateMatrix();
+mausoleum.matrixAutoUpdate = false; mausoleum.updateMatrix();
 scene.add(mausoleum);
 colliders.push({x: cemCenter.x, z: cemCenter.z, r: 2.6});
 addHidingSpot(cemCenter.x, 1.4, cemCenter.z + 2.13, 0);
 addHidingSpot(cemCenter.x, 1.4, cemCenter.z - 2.13, Math.PI);
 
-// --- ESCENARIO 2: RUINAS DE LA CABAÑA (Noroeste) + RADIO ROTA ---
+// Cabaña en ruinas + Radio
 const ruinCenter = {x: -36, z: -32};
 const walls = [
   {x: 0, z: -5, w: 10, d: 0.6, h: 2.8},
@@ -638,8 +685,7 @@ walls.forEach(w=>{
   const wx = ruinCenter.x + w.x, wz = ruinCenter.z + w.z;
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w.w, w.h, w.d), woodWallM);
   mesh.position.set(wx, w.h/2, wz);
-  mesh.matrixAutoUpdate = false;
-  mesh.updateMatrix();
+  mesh.matrixAutoUpdate = false; mesh.updateMatrix();
   scene.add(mesh);
   const steps = Math.ceil(Math.max(w.w, w.d));
   for(let s=0; s<steps; s++){
@@ -663,15 +709,12 @@ oldRadio.position.set(ruinCenter.x - 3.2, 0.12, ruinCenter.z + 3.2);
 oldRadio.rotation.y = 0.7;
 scene.add(oldRadio);
 
-// --- ESCENARIO 3: CÍRCULO RITUAL DE MONOLITOS CON RUNAS ROJAS (Sur) ---
+// Círculo ritual de monolitos
 const ritualCenter = {x: 0, z: 42};
 const runeTex = pixelTex(16, 48, (g,w,h)=>{
   g.fillStyle = '#25252c'; g.fillRect(0,0,w,h);
   g.fillStyle = '#ff001e';
-  g.fillRect(7, 4, 2, 40);
-  g.fillRect(3, 12, 10, 2);
-  g.fillRect(4, 24, 8, 2);
-  g.fillRect(3, 34, 10, 2);
+  g.fillRect(7, 4, 2, 40); g.fillRect(3, 12, 10, 2); g.fillRect(4, 24, 8, 2); g.fillRect(3, 34, 10, 2);
 });
 const runeMat = new THREE.MeshBasicMaterial({map:runeTex});
 const monoGeo = new THREE.BoxGeometry(1.3, 4.2, 1.3);
@@ -697,21 +740,18 @@ for(let i=0; i<8; i++){
   const inward = i % 2 === 0;
   const dirX = Math.cos(ang) * (inward ? -0.68 : 0.68);
   const dirZ = Math.sin(ang) * (inward ? -0.68 : 0.68);
-  const rot = Math.atan2(dirX, dirZ);
-  addHidingSpot(mx + dirX, 1.45, mz + dirZ, rot);
+  addHidingSpot(mx + dirX, 1.45, mz + dirZ, Math.atan2(dirX, dirZ));
 }
 const altar = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 1.4), stoneM);
 altar.position.set(ritualCenter.x, 0.55, ritualCenter.z);
-altar.matrixAutoUpdate = false;
-altar.updateMatrix();
+altar.matrixAutoUpdate = false; altar.updateMatrix();
 const altarOrb = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.32), new THREE.MeshBasicMaterial({color:0xff001e}));
 altarOrb.position.set(ritualCenter.x, 1.35, ritualCenter.z);
 scene.add(altar, altarOrb);
 colliders.push({x: ritualCenter.x, z: ritualCenter.z, r: 1.3});
 
-// --- SENDEROS DE PIEDRA Y POSTES GUÍA (InstancedMesh) ---
-const pathCoords = [];
-const lampPostsData = [];
+// Senderos y postes
+const pathCoords = [], lampPostsData = [];
 [cemCenter, ruinCenter, ritualCenter].forEach(dest=>{
   const steps = 16;
   for(let s=2; s<steps; s++){
@@ -719,7 +759,6 @@ const lampPostsData = [];
     const px = dest.x * t + rand(-0.6, 0.6);
     const pz = dest.z * t + rand(-0.6, 0.6);
     pathCoords.push({x: px, z: pz, rot: rand(0, Math.PI)});
-
     if(s % 5 === 0){
       const lx = px + 1.4, lz = pz + 1.4;
       lampPostsData.push({x: lx, z: lz});
@@ -730,10 +769,7 @@ const lampPostsData = [];
 
 const pathInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.9, 0.05, 0.9), pathStoneM, pathCoords.length);
 pathCoords.forEach((p, idx)=>{
-  _dummy.position.set(p.x, 0.025, p.z);
-  _dummy.rotation.set(0, p.rot, 0);
-  _dummy.scale.set(1, 1, 1);
-  _dummy.updateMatrix();
+  _dummy.position.set(p.x, 0.025, p.z); _dummy.rotation.set(0, p.rot, 0); _dummy.scale.set(1, 1, 1); _dummy.updateMatrix();
   pathInst.setMatrixAt(idx, _dummy.matrix);
 });
 scene.add(pathInst);
@@ -742,33 +778,25 @@ if(lampPostsData.length){
   const lPoleInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 2.3, 0.16), fenceM, lampPostsData.length);
   const lHeadInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.28, 0.34, 0.28), new THREE.MeshBasicMaterial({color:0x4a1218}), lampPostsData.length);
   lampPostsData.forEach((p, idx)=>{
-    _dummy.position.set(p.x, 1.15, p.z);
-    _dummy.rotation.set(0, 0, 0);
-    _dummy.scale.set(1, 1, 1);
-    _dummy.updateMatrix();
+    _dummy.position.set(p.x, 1.15, p.z); _dummy.rotation.set(0, 0, 0); _dummy.scale.set(1, 1, 1); _dummy.updateMatrix();
     lPoleInst.setMatrixAt(idx, _dummy.matrix);
-    _dummy.position.y = 2.35;
-    _dummy.updateMatrix();
+    _dummy.position.y = 2.35; _dummy.updateMatrix();
     lHeadInst.setMatrixAt(idx, _dummy.matrix);
   });
   scene.add(lPoleInst, lHeadInst);
 }
 
-// --- ESCENARIO 4: BOSQUE PROFUNDO CON INSTANCEDMESH ---
+// Bosque y murciélagos
 const bats = [];
 const batMat = new THREE.MeshBasicMaterial({color:0x08080c});
-const treeTrunks = [];
-const treeCanopies1 = [];
-const treeCanopies2 = [];
-const treeBranches = [];
+const treeTrunks = [], treeCanopies1 = [], treeCanopies2 = [], treeBranches = [];
 
 for(let i=0; i<135; i++){
   let x, z, tries = 0;
   do{
     const a = rand(0, Math.PI * 2);
     const rad = rand(8, MAP_R - 4);
-    x = Math.cos(a) * rad;
-    z = Math.sin(a) * rad;
+    x = Math.cos(a) * rad; z = Math.sin(a) * rad;
     tries++;
   } while((!isAreaClear(x, z, 4.8) || pathCoords.some(p => Math.hypot(x-p.x, z-p.z) < 2.6)) && tries < 25);
   if(tries >= 25) continue;
@@ -776,14 +804,8 @@ for(let i=0; i<135; i++){
   const s = rand(1.0, 1.8);
   const trunkW = 0.65 * s;
   treeTrunks.push({x, z, s});
-
-  if(i % 2 === 0){
-    treeCanopies1.push({x, z, s});
-    treeCanopies2.push({x, z, s});
-  } else {
-    treeBranches.push({x, z, s});
-  }
-
+  if(i % 2 === 0){ treeCanopies1.push({x, z, s}); treeCanopies2.push({x, z, s}); }
+  else { treeBranches.push({x, z, s}); }
   colliders.push({x, z, r: trunkW * 0.65});
 
   if(Math.hypot(x, z) > 15 && i % 3 === 0){
@@ -810,10 +832,7 @@ for(let i=0; i<135; i++){
 
 const trunkInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.65, 3.8, 0.65), trunkM, treeTrunks.length);
 treeTrunks.forEach((tr, idx)=>{
-  _dummy.position.set(tr.x, 1.9 * tr.s, tr.z);
-  _dummy.rotation.set(0, 0, 0);
-  _dummy.scale.set(tr.s, tr.s, tr.s);
-  _dummy.updateMatrix();
+  _dummy.position.set(tr.x, 1.9 * tr.s, tr.z); _dummy.rotation.set(0, 0, 0); _dummy.scale.set(tr.s, tr.s, tr.s); _dummy.updateMatrix();
   trunkInst.setMatrixAt(idx, _dummy.matrix);
 });
 scene.add(trunkInst);
@@ -822,14 +841,9 @@ if(treeCanopies1.length){
   const c1Inst = new THREE.InstancedMesh(new THREE.BoxGeometry(2.3, 1.3, 2.3), deadLeafM, treeCanopies1.length);
   const c2Inst = new THREE.InstancedMesh(new THREE.BoxGeometry(1.4, 1.0, 1.4), deadLeafM, treeCanopies2.length);
   treeCanopies1.forEach((c, idx)=>{
-    _dummy.position.set(c.x, 3.7 * c.s, c.z);
-    _dummy.rotation.set(0, 0, 0);
-    _dummy.scale.set(c.s, c.s, c.s);
-    _dummy.updateMatrix();
+    _dummy.position.set(c.x, 3.7 * c.s, c.z); _dummy.rotation.set(0, 0, 0); _dummy.scale.set(c.s, c.s, c.s); _dummy.updateMatrix();
     c1Inst.setMatrixAt(idx, _dummy.matrix);
-
-    _dummy.position.set(c.x, 4.6 * c.s, c.z);
-    _dummy.updateMatrix();
+    _dummy.position.set(c.x, 4.6 * c.s, c.z); _dummy.updateMatrix();
     c2Inst.setMatrixAt(idx, _dummy.matrix);
   });
   scene.add(c1Inst, c2Inst);
@@ -838,10 +852,7 @@ if(treeCanopies1.length){
 if(treeBranches.length){
   const bInst = new THREE.InstancedMesh(new THREE.BoxGeometry(1.6, 0.16, 0.16), trunkM, treeBranches.length);
   treeBranches.forEach((b, idx)=>{
-    _dummy.position.set(b.x + 0.45 * b.s, 2.8 * b.s, b.z);
-    _dummy.rotation.set(0, 0, 0.4);
-    _dummy.scale.set(b.s, b.s, b.s);
-    _dummy.updateMatrix();
+    _dummy.position.set(b.x + 0.45 * b.s, 2.8 * b.s, b.z); _dummy.rotation.set(0, 0, 0.4); _dummy.scale.set(b.s, b.s, b.s); _dummy.updateMatrix();
     bInst.setMatrixAt(idx, _dummy.matrix);
   });
   scene.add(bInst);
@@ -853,9 +864,7 @@ function updateBats(t, dt){
     const b = bats[i];
     if(!b.flying){
       if(playing && !paused && b.home.distanceToSquared(head) < 56.25){
-        b.flying = true;
-        b.flyTimer = 3.2;
-        b.grp.visible = true;
+        b.flying = true; b.flyTimer = 3.2; b.grp.visible = true;
         b.grp.position.copy(b.home);
         b.dir.set(rand(-1,1), rand(0.5, 1.1), rand(-1,1)).normalize();
         sfx('bats');
@@ -864,17 +873,12 @@ function updateBats(t, dt){
       b.flyTimer -= dt;
       b.grp.position.addScaledVector(b.dir, 6.5 * dt);
       const flap = Math.sin(t * 28) * 0.7;
-      b.wL.rotation.z = flap;
-      b.wR.rotation.z = -flap;
-      if(b.flyTimer <= 0){
-        b.flying = false;
-        b.grp.visible = false;
-      }
+      b.wL.rotation.z = flap; b.wR.rotation.z = -flap;
+      if(b.flyTimer <= 0){ b.flying = false; b.grp.visible = false; }
     }
   }
 }
 
-// Ojos rojos acechando en la oscuridad
 const shadowEyes = [];
 const redEyeMat = new THREE.MeshBasicMaterial({color:0xff001e});
 const eyeGeo = new THREE.BoxGeometry(.07,.05,.05);
@@ -888,7 +892,7 @@ for(let i=0;i<12;i++){
   shadowEyes.push(grp);
 }
 
-/* ================= Pilas 3D en el Mapa ================= */
+/* ================= Pilas 3D ================= */
 const batteries = [];
 const batBodyMat = new THREE.MeshLambertMaterial({color:0x111116});
 const batTopMat  = new THREE.MeshLambertMaterial({color:0x00e436, emissive:0x00330c});
@@ -907,11 +911,9 @@ function spawnBatteries(){
   const count = isNightmare() ? 5 : 10;
   for(let i=0; i<count; i++){
     let bx, bz;
-    if(i < fixedSpots.length){
-      bx = fixedSpots[i].x; bz = fixedSpots[i].z;
-    } else {
-      const a = rand(0, Math.PI * 2);
-      const r = rand(10, MAP_R - 5);
+    if(i < fixedSpots.length){ bx = fixedSpots[i].x; bz = fixedSpots[i].z; }
+    else {
+      const a = rand(0, Math.PI * 2), r = rand(10, MAP_R - 5);
       bx = Math.cos(a) * r; bz = Math.sin(a) * r;
     }
     const grp = new THREE.Group();
@@ -925,7 +927,7 @@ function spawnBatteries(){
   }
 }
 
-/* ================= Las 8 Páginas Ocultas + Visor de Página Recogida ================= */
+/* ================= Las 8 Páginas Ocultas ================= */
 const pages = [];
 const pageTexts = [
   'NO MIRES', 'SIEMPRE OBSERVA', 'SIN ROSTRO', 'CORRE YA',
@@ -1049,7 +1051,6 @@ function showCollectedPage(txt, count){
 
 function spawnPages(){
   pages.forEach(p=>scene.remove(p.m)); pages.length = 0;
-
   const shuffled = [...hidingSpots].sort(()=>Math.random()-0.5);
   const chosen = [];
   for(const spot of shuffled){
@@ -1058,7 +1059,6 @@ function spawnPages(){
       if(chosen.length === TOTAL_PAGES) break;
     }
   }
-
   for(let i=0; i<chosen.length; i++){
     const spot = chosen[i];
     const txt = pageTexts[i];
@@ -1073,15 +1073,11 @@ function spawnPages(){
   }
 }
 
-/* ================= Modelo Voxel de SLENDERMAN + Silueta de Alucinación ================= */
+/* ================= Modelo Voxel de SLENDERMAN ================= */
 function buildSlenderMesh(isHallucination=false){
   const grp = new THREE.Group();
-  const sMat = new THREE.MeshLambertMaterial({
-    color:0x050507, transparent:isHallucination, opacity:isHallucination?0.55:1
-  });
-  const wMat = new THREE.MeshLambertMaterial({
-    color:0xf8f8f8, emissive:0x1a1a1a, transparent:isHallucination, opacity:isHallucination?0.55:1
-  });
+  const sMat = new THREE.MeshLambertMaterial({ color:0x050507, transparent:isHallucination, opacity:isHallucination?0.55:1 });
+  const wMat = new THREE.MeshLambertMaterial({ color:0xf8f8f8, emissive:0x1a1a1a, transparent:isHallucination, opacity:isHallucination?0.55:1 });
   const tMat = new THREE.MeshLambertMaterial({color:0xb3001b, emissive:0x220004});
 
   const legL = new THREE.Mesh(new THREE.BoxGeometry(.16,1.3,.16), sMat); legL.position.set(-.13,.65,0);
@@ -1113,12 +1109,9 @@ scene.add(slender);
 const {grp: phantomSlender} = buildSlenderMesh(true);
 phantomSlender.visible = false;
 scene.add(phantomSlender);
-let phantomTimer = 0;
-let forestEventTimer = 16;
-let ambientGlitchTimer = 0;
-let ambientApparitionTimer = 0;
+let phantomTimer = 0, forestEventTimer = 16, ambientGlitchTimer = 0, ambientApparitionTimer = 0;
 
-/* ================= SCREAMER ORIGINAL OPTIMIZADO (Texturas Pre-Cacheadas) ================= */
+/* ================= SCREAMER ================= */
 function buildStaticTextures(count, isJumpscare){
   const list = [];
   for(let f=0; f<count; f++){
@@ -1128,28 +1121,17 @@ function buildStaticTextures(count, isJumpscare){
         g.fillStyle = `rgba(${shade},${shade},${shade},0.75)`;
         g.fillRect(Math.floor(Math.random()*48)*2, Math.floor(Math.random()*48)*2, 2, 2);
       }
-      g.fillStyle = 'rgba(255,0,40,0.22)';
-      g.fillRect(0, Math.floor(Math.random()*90), 96, 2);
-      g.fillStyle = 'rgba(0,235,255,0.22)';
-      g.fillRect(0, Math.floor(Math.random()*90), 96, 2);
+      g.fillStyle = 'rgba(255,0,40,0.22)'; g.fillRect(0, Math.floor(Math.random()*90), 96, 2);
+      g.fillStyle = 'rgba(0,235,255,0.22)'; g.fillRect(0, Math.floor(Math.random()*90), 96, 2);
 
       if(isJumpscare){
         const jx = rand(-6,6), jy = rand(-5,5);
-        g.fillStyle = '#050507';
-        g.fillRect(8+jx, 70+jy, 80, 30);
-        g.fillStyle = '#e8e8e8';
-        g.fillRect(40+jx, 70+jy, 16, 26);
-        g.fillStyle = '#111115';
-        g.fillRect(46+jx, 72+jy, 4, 24);
-
-        g.fillStyle = '#dcdcdc';
-        g.fillRect(26+jx, 10+jy, 44, 62);
-        g.fillStyle = '#f7f7f7';
-        g.fillRect(29+jx, 13+jy, 38, 56);
-        g.fillStyle = '#bdbdbd';
-        g.fillRect(27+jx, 32+jy, 4, 26);
-        g.fillRect(65+jx, 32+jy, 4, 26);
-        g.fillRect(35+jx, 64+jy, 26, 6);
+        g.fillStyle = '#050507'; g.fillRect(8+jx, 70+jy, 80, 30);
+        g.fillStyle = '#e8e8e8'; g.fillRect(40+jx, 70+jy, 16, 26);
+        g.fillStyle = '#111115'; g.fillRect(46+jx, 72+jy, 4, 24);
+        g.fillStyle = '#dcdcdc'; g.fillRect(26+jx, 10+jy, 44, 62);
+        g.fillStyle = '#f7f7f7'; g.fillRect(29+jx, 13+jy, 38, 56);
+        g.fillStyle = '#bdbdbd'; g.fillRect(27+jx, 32+jy, 4, 26); g.fillRect(65+jx, 32+jy, 4, 26); g.fillRect(35+jx, 64+jy, 26, 6);
       }
     }));
   }
@@ -1158,15 +1140,10 @@ function buildStaticTextures(count, isJumpscare){
 
 const staticTexturesNormal = buildStaticTextures(4, false);
 const staticTexturesJumpscare = buildStaticTextures(4, true);
-let staticFrameIdx = 0;
-let staticSwapTimer = 0;
+let staticFrameIdx = 0, staticSwapTimer = 0;
 
 const screamMat = new THREE.MeshBasicMaterial({
-  map: staticTexturesNormal[0],
-  transparent: true,
-  opacity: 0,
-  depthTest: false,
-  fog: false
+  map: staticTexturesNormal[0], transparent: true, opacity: 0, depthTest: false, fog: false
 });
 const screamPlane = new THREE.Mesh(new THREE.PlaneGeometry(1.55, 1.55), screamMat);
 screamPlane.position.set(0, 0, -0.45);
@@ -1207,7 +1184,7 @@ function updateVhsEffect(staticLevel){
   }
 }
 
-/* ================= HUD Muñeca Izquierda (VR) + HUD Pantalla ================= */
+/* ================= HUD ================= */
 const hudOverlay   = document.getElementById('hud-overlay');
 const hudPagesEl   = document.getElementById('hud-pages');
 const hudTimeEl    = document.getElementById('hud-time');
@@ -1227,18 +1204,13 @@ function getNearestPageSignal(){
   if(!pages.length) return {distance: Infinity, label: 'SIN RASTRO', level: 'none', strength: 0, arrow: '•'};
   const playerPosition = camera.getWorldPosition(pageSignalPosition);
   camera.getWorldDirection(pageSignalForward);
-  pageSignalForward.y = 0;
-  pageSignalForward.normalize();
+  pageSignalForward.y = 0; pageSignalForward.normalize();
 
-  let nearest = Infinity;
-  let nearestPage = null;
+  let nearest = Infinity, nearestPage = null;
   for(let i=0; i<pages.length; i++){
     const page = pages[i];
     const distance = Math.hypot(page.m.position.x - playerPosition.x, page.m.position.z - playerPosition.z);
-    if(distance < nearest){
-      nearest = distance;
-      nearestPage = page;
-    }
+    if(distance < nearest){ nearest = distance; nearestPage = page; }
   }
 
   let arrow = '▲';
@@ -1246,8 +1218,7 @@ function getNearestPageSignal(){
     const dx = nearestPage.m.position.x - playerPosition.x;
     const dz = nearestPage.m.position.z - playerPosition.z;
     const len = Math.hypot(dx, dz) || 1;
-    const nx = dx / len;
-    const nz = dz / len;
+    const nx = dx / len, nz = dz / len;
     const dot = pageSignalForward.x * nx + pageSignalForward.z * nz;
     const cross = pageSignalForward.x * nz - pageSignalForward.z * nx;
     if(dot > 0.72) arrow = '▲';
@@ -1300,7 +1271,6 @@ function drawPanel(msg){
   } else {
     g.fillStyle='#ffec27'; g.font='bold 18px monospace';
     g.fillText(`NOTAS:${pagesFound}/${TOTAL_PAGES}  ${formatTime(timeLeft)}`,160,30);
-
     for(let i=0;i<TOTAL_PAGES;i++){
       const x = 60 + i*25;
       g.fillStyle = i < pagesFound ? '#b3001b' : '#191820';
@@ -1308,34 +1278,24 @@ function drawPanel(msg){
       g.strokeStyle = i < pagesFound ? '#ffec27' : '#55515b'; g.lineWidth = 1.5; g.strokeRect(x,39,18,11);
       if(i < pagesFound){ g.fillStyle='#fff'; g.fillRect(x+7,42,4,5); }
     }
-
     g.fillStyle='#ff001e'; g.font='bold 15px monospace';
     g.fillText(`CORDURA:${Math.max(0,Math.ceil(sanity))}%  BAT:${Math.ceil(battery)}%`,160,64);
-
     g.fillStyle='#29adff'; g.font='bold 14px monospace';
     g.fillText(`STAM:${Math.ceil(stamina)}% ${isNightmare()?'[PESADILLA]':'[NORMAL]'}`,160,88);
-
     g.textAlign='left';
     g.fillStyle='#aaaaaa'; g.font='bold 13px monospace';
     g.fillText('RUIDO AMBIENTE (MIC):', 24, 117);
-
     g.fillStyle='#161620'; g.fillRect(24, 126, 272, 26);
     g.strokeStyle='#555566'; g.lineWidth=3; g.strokeRect(24, 126, 272, 26);
-
     const thresh = getNoiseThreshold();
     const pct = Math.min(1, micLevel / (thresh * 2.2));
     g.fillStyle = pct > 0.45 ? '#ff001e' : (pct > 0.25 ? '#ffec27' : '#00e436');
     g.fillRect(27, 129, Math.floor(266 * pct), 20);
-
     const threshX = 27 + Math.floor(266 * 0.45);
     g.fillStyle='#ffffff'; g.fillRect(threshX, 125, 3, 28);
-
     if(!micReady){
-      g.textAlign='center';
-      g.fillStyle='#ffec27'; g.font='bold 12px monospace';
-      g.fillText('SIN MICROFONO', 160, 141);
+      g.textAlign='center'; g.fillStyle='#ffec27'; g.font='bold 12px monospace'; g.fillText('SIN MICROFONO', 160, 141);
     }
-
     const pageSignal = getNearestPageSignal();
     g.textAlign='center';
     g.fillStyle = pageSignal.level === 'strong' ? '#ff455c' : (pageSignal.level === 'medium' ? '#ff9d43' : (pageSignal.level === 'weak' ? '#ffec27' : '#8c8790'));
@@ -1352,22 +1312,14 @@ async function initMicrophone(){
   if(!gameSettings.microphone || micReady || !navigator.mediaDevices?.getUserMedia) return;
   try{
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1
-      }
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }
     });
     micContext = new (window.AudioContext || window.webkitAudioContext)();
     const src = micContext.createMediaStreamSource(micStream);
     const highPass = micContext.createBiquadFilter();
-    highPass.type = 'highpass';
-    highPass.frequency.value = 105;
-    highPass.Q.value = 0.7;
+    highPass.type = 'highpass'; highPass.frequency.value = 105; highPass.Q.value = 0.7;
     micAnalyser = micContext.createAnalyser();
-    micAnalyser.fftSize = 256;
-    micAnalyser.smoothingTimeConstant = 0.55;
+    micAnalyser.fftSize = 256; micAnalyser.smoothingTimeConstant = 0.55;
     micData = new Uint8Array(micAnalyser.fftSize);
     src.connect(highPass).connect(micAnalyser);
     micNoiseFloor = 0.004;
@@ -1387,7 +1339,6 @@ function stopMicrophone(){
   noiseFillEl.style.width = '0%';
   noiseStatEl.textContent = 'MICRÓFONO DESACTIVADO';
 }
-
 window.addEventListener('pagehide', stopMicrophone);
 
 function updateMicrophone(){
@@ -1415,22 +1366,14 @@ function updateMicrophone(){
   noiseFillEl.style.width = `${pct}%`;
 
   noiseBoxEl.classList.remove('warn', 'danger');
-  if(!micReady){
-    noiseStatEl.textContent = gameSettings.microphone ? 'SIN MIC' : 'MIC APAGADO';
-  } else if(performance.now() < micCalibrationUntil){
-    noiseStatEl.textContent = 'CALIBRANDO';
-  } else if(pct >= 45){
-    noiseBoxEl.classList.add('danger');
-    noiseStatEl.textContent = '¡TE ESCUCHA!';
-  } else if(pct >= 24){
-    noiseBoxEl.classList.add('warn');
-    noiseStatEl.textContent = 'RUIDO LEVE';
-  } else {
-    noiseStatEl.textContent = !flashlightOn ? 'OCULTO' : 'SILENCIO';
-  }
+  if(!micReady) noiseStatEl.textContent = gameSettings.microphone ? 'SIN MIC' : 'MIC APAGADO';
+  else if(performance.now() < micCalibrationUntil) noiseStatEl.textContent = 'CALIBRANDO';
+  else if(pct >= 45){ noiseBoxEl.classList.add('danger'); noiseStatEl.textContent = '¡TE ESCUCHA!'; }
+  else if(pct >= 24){ noiseBoxEl.classList.add('warn'); noiseStatEl.textContent = 'RUIDO LEVE'; }
+  else noiseStatEl.textContent = !flashlightOn ? 'OCULTO' : 'SILENCIO';
 }
 
-/* ================= Menús, Pantalla Final y Reinicio ================= */
+/* ================= Menús, Cinemática y Pausa ================= */
 const startMenu  = document.getElementById('start-menu');
 const endScreen  = document.getElementById('end-screen');
 const firstContactCard = document.getElementById('first-contact-card');
@@ -1449,60 +1392,34 @@ const introCopy = document.getElementById('intro-copy');
 const introCounter = document.getElementById('intro-counter');
 const introProgressFill = document.getElementById('intro-progress-fill');
 const introContent = cinematicIntro?.querySelector('.intro-content');
-let introSequenceActive = false;
-let introTimers = [];
+let introSequenceActive = false, introTimers = [];
 
 const cinematicScenes = [
-  {
-    kicker: 'CINTA RECUPERADA · REGISTRO 08',
-    title: 'PINE RIDGE',
-    copy: 'La última patrulla entró al bosque para investigar una llamada de auxilio. La cámara siguió grabando después de que todos desaparecieron.',
-    cue: 'signal'
-  },
-  {
-    kicker: '23:47:12 · TRANSMISIÓN INTERRUMPIDA',
-    title: 'OCHO NOTAS',
-    copy: 'Ocho hojas fueron encontradas en tres lugares: el cementerio, una cabaña en ruinas y un altar perdido entre los árboles.',
-    cue: 'distantFootsteps'
-  },
-  {
-    kicker: 'TESTIMONIO NO VERIFICADO',
-    title: 'NO ESTÁS SOLO',
-    copy: 'Los testigos describen una figura alta, inmóvil y sin rostro. Si aparece entre los árboles, apaga la linterna. No la mires demasiado tiempo.',
-    cue: 'whisperCue'
-  },
-  {
-    kicker: 'PROTOCOLO DE SUPERVIVENCIA',
-    title: 'SOBREVIVE',
-    copy: 'Recupera las ocho notas. Vigila la batería. Mantén el silencio. Si escuchas pasos detrás de ti, no te detengas.',
-    cue: 'thunder'
-  }
+  { kicker: 'CINTA RECUPERADA · REGISTRO 08', title: 'PINE RIDGE', copy: 'La última patrulla entró al bosque para investigar una llamada de auxilio. La cámara siguió grabando después de que todos desaparecieron.', cue: 'signal' },
+  { kicker: '23:47:12 · TRANSMISIÓN INTERRUMPIDA', title: 'OCHO NOTAS', copy: 'Ocho hojas fueron encontradas en tres lugares: el cementerio, una cabaña en ruinas y un altar perdido entre los árboles.', cue: 'distantFootsteps' },
+  { kicker: 'TESTIMONIO NO VERIFICADO', title: 'NO ESTÁS SOLO', copy: 'Los testigos describen una figura alta, inmóvil y sin rostro. Si aparece entre los árboles, apaga la linterna. No la mires demasiado tiempo.', cue: 'whisperCue' },
+  { kicker: 'PROTOCOLO DE SUPERVIVENCIA', title: 'SOBREVIVE', copy: 'Recupera las ocho notas. Vigila la batería. Mantén el silencio. Si escuchas pasos detrás de ti, no te detengas.', cue: 'thunder' }
 ];
 
-function clearIntroTimers(){
-  introTimers.forEach(timer=>clearTimeout(timer));
-  introTimers = [];
-}
+function clearIntroTimers(){ introTimers.forEach(timer=>clearTimeout(timer)); introTimers = []; }
 
 function resetCinematicIntro(){
   clearIntroTimers();
   introSequenceActive = false;
-  setMenuMusicActive(false);
+  setMenuMusicActive(false); setRainActive(false);
   cinematicIntro?.classList.remove('is-hidden', 'is-closing');
   cinematicIntro?.setAttribute('aria-hidden', 'false');
-  introPlayButton.disabled = false;
-  introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
+  introPlayButton.disabled = false; introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
   introKicker.textContent = 'CINTA RECUPERADA · REGISTRO 08';
   introTitle.textContent = 'PINE RIDGE';
   introCopy.textContent = 'La última transmisión llegó desde el bosque a las 23:47. Después, solo quedó estática.';
   introCounter.textContent = 'ARCHIVO EN ESPERA';
   introProgressFill.style.width = '0%';
-  introContent?.classList.remove('is-cut');
 }
 
 function playIntroCue(cue){
   if(!cue || typeof sfx !== 'function') return;
-  try{ sfx(cue); }catch(error){ console.warn('No se pudo reproducir el sonido de introducción:', error); }
+  try{ sfx(cue); }catch{}
 }
 
 function finishCinematicIntro(){
@@ -1515,10 +1432,8 @@ function finishCinematicIntro(){
     cinematicIntro.classList.remove('is-closing');
     loadRecords();
     startMenu.classList.remove('hidden');
-    initAudio();
-    setMenuMusicActive(true);
-    introPlayButton.disabled = false;
-    introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
+    initAudio(); setMenuMusicActive(true);
+    introPlayButton.disabled = false; introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
     btnStartPc.focus({preventScroll:true});
   }, 480);
   introTimers.push(timer);
@@ -1528,24 +1443,14 @@ function showCinematicScene(index){
   if(!introSequenceActive) return;
   const sceneData = cinematicScenes[index];
   if(!sceneData){ finishCinematicIntro(); return; }
-
-  introContent?.classList.remove('is-cut');
-  if(introContent) void introContent.offsetWidth;
-  introContent?.classList.add('is-cut');
-
   introKicker.textContent = sceneData.kicker;
   introTitle.textContent = sceneData.title;
   introCopy.textContent = sceneData.copy;
   introCounter.textContent = `SECUENCIA ${String(index + 1).padStart(2, '0')} / ${String(cinematicScenes.length).padStart(2, '0')}`;
   introProgressFill.style.width = `${((index + 1) / cinematicScenes.length) * 100}%`;
   playIntroCue(sceneData.cue);
-
-  if(index < cinematicScenes.length - 1){
-    introTimers.push(setTimeout(()=>showCinematicScene(index + 1), 3600));
-  }else{
-    introCounter.textContent = 'ARCHIVO LISTO · INICIANDO MENÚ';
-    introTimers.push(setTimeout(finishCinematicIntro, 3900));
-  }
+  if(index < cinematicScenes.length - 1) introTimers.push(setTimeout(()=>showCinematicScene(index + 1), 3600));
+  else { introCounter.textContent = 'ARCHIVO LISTO · INICIANDO MENÚ'; introTimers.push(setTimeout(finishCinematicIntro, 3900)); }
 }
 
 function startCinematicIntro(){
@@ -1553,14 +1458,8 @@ function startCinematicIntro(){
   clearIntroTimers();
   introSequenceActive = true;
   setMenuMusicActive(false);
-  introPlayButton.disabled = true;
-  introPlayButton.textContent = 'TRANSMISIÓN EN CURSO...';
-  try{
-    initAudio();
-    if(ac?.state === 'suspended') ac.resume().catch(()=>{});
-  }catch(error){
-    console.warn('El audio de la introducción no está disponible; se continuará en modo silencioso.', error);
-  }
+  introPlayButton.disabled = true; introPlayButton.textContent = 'TRANSMISIÓN EN CURSO...';
+  try{ initAudio(); if(ac?.state === 'suspended') ac.resume().catch(()=>{}); }catch{}
   showCinematicScene(0);
 }
 
@@ -1572,20 +1471,15 @@ function skipCinematicIntro(){
   cinematicIntro.setAttribute('aria-hidden', 'true');
   loadRecords();
   startMenu.classList.remove('hidden');
-  initAudio();
-  setMenuMusicActive(true);
-  introPlayButton.disabled = false;
-  introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
+  initAudio(); setMenuMusicActive(true);
+  introPlayButton.disabled = false; introPlayButton.textContent = '▶ REPRODUCIR ARCHIVO';
   btnStartPc.focus({preventScroll:true});
 }
 
 introPlayButton?.addEventListener('click', startCinematicIntro);
 introSkipButton?.addEventListener('click', skipCinematicIntro);
-introReplayButton?.addEventListener('click', ()=>{
-  startMenu.classList.add('hidden');
-  setMenuMusicActive(false);
-  resetCinematicIntro();
-});
+introReplayButton?.addEventListener('click', ()=>{ startMenu.classList.add('hidden'); setMenuMusicActive(false); resetCinematicIntro(); });
+
 const pauseScreen = document.getElementById('pause-screen');
 const pauseOptionButtons = [...document.querySelectorAll('.pause-option')];
 const pauseOptionNames = ['CONTINUAR', 'REINICIAR PARTIDA', 'VOLVER AL MENÚ'];
@@ -1609,18 +1503,7 @@ const reducedMotionToggle = document.getElementById('reduced-motion');
 const microphoneToggle = document.getElementById('microphone-enabled');
 const settingsStatusElement = document.getElementById('settings-status');
 
-renderer.domElement.addEventListener('webglcontextlost',(event)=>{
-  event.preventDefault();
-  if(settingsStatusElement) settingsStatusElement.textContent = 'SE PERDIÓ EL CONTEXTO GRÁFICO. ESPERA A QUE EL NAVEGADOR LO RESTAURE.';
-});
-renderer.domElement.addEventListener('webglcontextrestored',()=>{
-  applyGraphicsQuality();
-  if(settingsStatusElement) settingsStatusElement.textContent = 'CONTEXTO GRÁFICO RESTAURADO.';
-});
-
-function saveGameSettings(){
-  storageSet(GAME_SETTINGS_KEY, JSON.stringify(gameSettings));
-}
+function saveGameSettings(){ storageSet(GAME_SETTINGS_KEY, JSON.stringify(gameSettings)); }
 
 function applyGraphicsQuality(){
   const preset = QUALITY_PRESETS[gameSettings.quality] || QUALITY_PRESETS.balanced;
@@ -1643,38 +1526,25 @@ function renderGameSettings(){
   vhsOverlay.classList.toggle('reduced-motion', gameSettings.reducedMotion);
 }
 
-graphicsQualitySelect?.addEventListener('change', ()=>{
-  gameSettings.quality = graphicsQualitySelect.value;
-  applyGraphicsQuality(); saveGameSettings();
-});
+graphicsQualitySelect?.addEventListener('change', ()=>{ gameSettings.quality = graphicsQualitySelect.value; applyGraphicsQuality(); saveGameSettings(); });
 reducedMotionToggle?.addEventListener('change', ()=>{
   gameSettings.reducedMotion = reducedMotionToggle.checked;
   vhsOverlay.classList.toggle('reduced-motion', gameSettings.reducedMotion);
   saveGameSettings();
-  if(settingsStatusElement) settingsStatusElement.textContent = gameSettings.reducedMotion ? 'MOVIMIENTO REDUCIDO ACTIVADO.' : 'EFECTOS VISUALES COMPLETOS ACTIVADOS.';
 });
 microphoneToggle?.addEventListener('change', async ()=>{
   gameSettings.microphone = microphoneToggle.checked;
   saveGameSettings();
-  if(gameSettings.microphone){
-    if(playing) await initMicrophone();
-    if(settingsStatusElement) settingsStatusElement.textContent = 'DETECCIÓN POR MICRÓFONO ACTIVADA.';
-  }else{
-    stopMicrophone();
-    if(settingsStatusElement) settingsStatusElement.textContent = 'DETECCIÓN POR MICRÓFONO DESACTIVADA.';
-  }
+  if(gameSettings.microphone){ if(playing) await initMicrophone(); }
+  else stopMicrophone();
 });
 renderGameSettings();
 applyGraphicsQuality();
 
-function saveAudioPrefs(){
-  storageSet(AUDIO_PREFS_KEY, JSON.stringify(audioPrefs));
-}
-
+function saveAudioPrefs(){ storageSet(AUDIO_PREFS_KEY, JSON.stringify(audioPrefs)); }
 function renderAudioPrefs(){
   for(const key of Object.keys(audioSliderElements)){
-    const slider = audioSliderElements[key];
-    const output = audioValueElements[key];
+    const slider = audioSliderElements[key], output = audioValueElements[key];
     if(slider) slider.value = String(audioPrefs[key]);
     if(output) output.value = `${audioPrefs[key]}%`;
   }
@@ -1683,36 +1553,26 @@ function renderAudioPrefs(){
     audioMuteButton.setAttribute('aria-pressed', String(audioPrefs.muted));
   }
 }
-
 function applyAudioMix(){
   if(!ac) return;
-  const active = audioPrefs.muted ? 0 : 1;
-  const now = ac.currentTime;
+  const active = audioPrefs.muted ? 0 : 1, now = ac.currentTime;
   if(musicBus) musicBus.gain.setTargetAtTime((audioPrefs.music / 100) * 0.72 * active, now, 0.08);
-  if(ambienceBus) ambienceBus.gain.setTargetAtTime((audioPrefs.ambience / 100) * 0.62 * active, now, 0.08);
-  if(effectsBus) effectsBus.gain.setTargetAtTime((audioPrefs.effects / 100) * 0.82 * active, now, 0.08);
+  if(ambienceBus) ambienceBus.gain.setTargetAtTime((audioPrefs.ambience / 100) * 0.85 * active, now, 0.08);
+  if(effectsBus) effectsBus.gain.setTargetAtTime((audioPrefs.effects / 100) * 0.88 * active, now, 0.08);
   if(audioListener.setMasterVolume) audioListener.setMasterVolume((audioPrefs.effects / 100) * active);
 }
-
 for(const [key, slider] of Object.entries(audioSliderElements)){
   slider?.addEventListener('input', ()=>{
-    initAudio();
-    setMenuMusicActive(true);
+    initAudio(); setMenuMusicActive(true);
     audioPrefs[key] = Number(slider.value);
     if(audioValueElements[key]) audioValueElements[key].value = `${audioPrefs[key]}%`;
-    saveAudioPrefs();
-    applyAudioMix();
-    if(audioStatusElement) audioStatusElement.textContent = 'MEZCLA ACTUALIZADA Y GUARDADA EN ESTE DISPOSITIVO';
+    saveAudioPrefs(); applyAudioMix();
   });
 }
 audioMuteButton?.addEventListener('click', ()=>{
-  initAudio();
-  setMenuMusicActive(true);
+  initAudio(); setMenuMusicActive(true);
   audioPrefs.muted = !audioPrefs.muted;
-  renderAudioPrefs();
-  saveAudioPrefs();
-  applyAudioMix();
-  if(audioStatusElement) audioStatusElement.textContent = audioPrefs.muted ? 'AUDIO SILENCIADO' : 'AUDIO ACTIVADO';
+  renderAudioPrefs(); saveAudioPrefs(); applyAudioMix();
 });
 renderAudioPrefs();
 
@@ -1735,13 +1595,12 @@ function drawVRFirstContact(){
 
 function showFirstEncounter(){
   if(firstEncounterShown) return;
-  firstEncounterShown = true;
-  firstEncounterTimer = 3.1;
+  firstEncounterShown = true; firstEncounterTimer = 3.1;
   ambientGlitchTimer = Math.max(ambientGlitchTimer, 1.05);
   flashFailTimer = Math.max(flashFailTimer, 0.28);
   sfx('manifestation');
   ctrls.forEach(controller=>pulse(controller, 0.35, 110));
-  if(renderer.xr.isPresenting){
+  if(renderer.xr.isPresenting || mobileVrActive){
     firstContactCard?.classList.add('hidden');
     firstContact3D.visible = true;
     drawVRFirstContact();
@@ -1793,20 +1652,13 @@ function drawVRGameOverPanel(result){
 function drawVRPauseMenu(){
   const ctx = pauseMenuCanvas.getContext('2d');
   if(!ctx) return;
-
   ctx.clearRect(0, 0, pauseMenuCanvas.width, pauseMenuCanvas.height);
-  ctx.fillStyle = 'rgba(5, 5, 9, 0.96)';
-  ctx.fillRect(28, 28, 968, 712);
-  ctx.strokeStyle = '#b3001b';
-  ctx.lineWidth = 18;
-  ctx.strokeRect(28, 28, 968, 712);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#ff1e38';
-  ctx.font = 'bold 48px monospace';
+  ctx.fillStyle = 'rgba(5, 5, 9, 0.96)'; ctx.fillRect(28, 28, 968, 712);
+  ctx.strokeStyle = '#b3001b'; ctx.lineWidth = 18; ctx.strokeRect(28, 28, 968, 712);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ff1e38'; ctx.font = 'bold 48px monospace';
   ctx.fillText('SEÑAL INTERRUMPIDA • VHS-1994', 512, 115);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 68px monospace';
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 68px monospace';
   ctx.fillText('PARTIDA EN PAUSA', 512, 220);
 
   pauseOptionNames.forEach((label, index)=>{
@@ -1815,24 +1667,17 @@ function drawVRPauseMenu(){
     ctx.fillStyle = selected ? '#b3001b' : '#17171f';
     ctx.fillRect(170, y - 38, 684, 76);
     ctx.strokeStyle = selected ? '#ffec27' : '#555566';
-    ctx.lineWidth = selected ? 7 : 3;
-    ctx.strokeRect(170, y - 38, 684, 76);
+    ctx.lineWidth = selected ? 7 : 3; ctx.strokeRect(170, y - 38, 684, 76);
     ctx.fillStyle = selected ? '#ffffff' : '#b8b8c5';
     ctx.font = selected ? 'bold 38px monospace' : '34px monospace';
     ctx.fillText(`${selected ? '▶  ' : ''}${label}`, 512, y);
   });
-
-  ctx.fillStyle = '#aaaab7';
-  ctx.font = '24px monospace';
-  ctx.fillText('STICK IZQ.: NAVEGAR     A / X: CONFIRMAR     B / Y: VOLVER', 512, 685);
   pauseMenuTexture.needsUpdate = true;
 }
 
 function updatePauseSelection(nextIndex){
   pauseSelection = (nextIndex + pauseOptionNames.length) % pauseOptionNames.length;
-  pauseOptionButtons.forEach((button, index)=>{
-    button.classList.toggle('active', index === pauseSelection);
-  });
+  pauseOptionButtons.forEach((button, index)=>button.classList.toggle('active', index === pauseSelection));
   if(renderer.xr.isPresenting) drawVRPauseMenu();
 }
 
@@ -1842,8 +1687,11 @@ function hidePauseUI(){
 }
 
 function openPauseMenu(){
-  if(!playing || paused) return;
+  if(!playing || paused || pendingDefeatReason) return;
   paused = true;
+  stopScreamerSound();
+  screamerTimer = 0; screamMat.opacity = 0;
+  setRainActive(false);
   updatePauseSelection(0);
   if(renderer.xr.isPresenting){
     pauseScreen.classList.add('hidden');
@@ -1856,38 +1704,29 @@ function openPauseMenu(){
 
 function resumeFromPause(){
   if(!playing || !paused) return;
-  paused = false;
-  hidePauseUI();
+  paused = false; setRainActive(true); hidePauseUI();
 }
 
 function restartFromPause(){
   if(!playing || !paused) return;
   resetGame();
-  playing = true;
-  paused = false;
-  setMenuMusicActive(false);
-  hidePauseUI();
-  startMenu.classList.add('hidden');
-  endScreen.classList.add('hidden');
-  hudOverlay.classList.remove('hidden');
+  playing = true; paused = false;
+  setMenuMusicActive(false); setRainActive(true); hidePauseUI();
+  startMenu.classList.add('hidden'); endScreen.classList.add('hidden'); hudOverlay.classList.remove('hidden');
 }
 
 function returnToMainMenuFromPause(){
   if(!playing || !paused) return;
-  hidePauseUI();
+  hidePauseUI(); setRainActive(false);
+  if(mobileVrActive) exitMobileVR();
   if(renderer.xr.isPresenting){
     const session = renderer.xr.getSession();
     if(session) session.end();
     return;
   }
-
-  playing = false;
-  paused = false;
-  stopMicrophone();
-  resetGame();
-  loadRecords();
-  hudOverlay.classList.add('hidden');
-  endScreen.classList.add('hidden');
+  playing = false; paused = false;
+  stopMicrophone(); resetGame(); loadRecords();
+  hudOverlay.classList.add('hidden'); endScreen.classList.add('hidden'); touchHudEl?.classList.add('hidden');
   startMenu.classList.remove('hidden');
   setMenuMusicActive(true);
 }
@@ -1900,29 +1739,23 @@ function activatePauseSelection(){
 }
 
 function restartFromGameOver(){
-  gameOverActive = false;
-  gameOverPanel3D.visible = false;
+  gameOverActive = false; gameOverPanel3D.visible = false;
   resetGame();
-  playing = true;
-  paused = false;
-  setMenuMusicActive(false);
-  hidePauseUI();
-  startMenu.classList.add('hidden');
-  endScreen.classList.add('hidden');
-  hudOverlay.classList.remove('hidden');
+  playing = true; paused = false;
+  setMenuMusicActive(false); setRainActive(true); hidePauseUI();
+  startMenu.classList.add('hidden'); endScreen.classList.add('hidden'); hudOverlay.classList.remove('hidden');
   initAudio();
 }
 
 function exitGameOverToMenu(){
-  gameOverActive = false;
-  gameOverPanel3D.visible = false;
+  gameOverActive = false; gameOverPanel3D.visible = false; setRainActive(false);
+  if(mobileVrActive) exitMobileVR();
   const session = renderer.xr.getSession();
   if(session) session.end();
   else {
-    resetGame();
-    loadRecords();
-    startMenu.classList.remove('hidden');
-    endScreen.classList.add('hidden');
+    resetGame(); loadRecords();
+    touchHudEl?.classList.add('hidden');
+    startMenu.classList.remove('hidden'); endScreen.classList.add('hidden');
     setMenuMusicActive(true);
   }
 }
@@ -1934,25 +1767,19 @@ function handleVRGameOverAction(action){
 }
 
 function togglePause(){
-  if(!playing) return;
+  if(!playing || pendingDefeatReason) return;
   if(paused) resumeFromPause();
   else openPauseMenu();
 }
 
 pauseOptionButtons.forEach(button=>{
-  button.addEventListener('mouseenter', ()=>{
-    updatePauseSelection(pauseOptionButtons.indexOf(button));
-  });
-  button.addEventListener('click', ()=>{
-    updatePauseSelection(pauseOptionButtons.indexOf(button));
-    activatePauseSelection();
-  });
+  button.addEventListener('mouseenter', ()=>updatePauseSelection(pauseOptionButtons.indexOf(button)));
+  button.addEventListener('click', ()=>{ updatePauseSelection(pauseOptionButtons.indexOf(button)); activatePauseSelection(); });
 });
 
 diffBtns.forEach(btn=>{
   btn.addEventListener('click', ()=>{
-    initAudio();
-    setMenuMusicActive(true);
+    initAudio(); setMenuMusicActive(true);
     diffBtns.forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     diffMultiplier = parseFloat(btn.dataset.diff);
@@ -1964,7 +1791,12 @@ diffBtns.forEach(btn=>{
   });
 });
 
-function startGameFromMenu(){
+function startGameFromMenu(keepMobileVr = false){
+  if(!keepMobileVr){
+    mobileVrActive = false;
+    document.getElementById('btn-exit-mobile-vr')?.classList.add('hidden');
+    enterMobileFullscreen();
+  }
   initAudio();
   initMicrophone();
   gameOverActive = false;
@@ -1975,36 +1807,31 @@ function startGameFromMenu(){
   startMenu.classList.add('hidden');
   endScreen.classList.add('hidden');
   hudOverlay.classList.remove('hidden');
+  if(isMobileDevice() && !mobileVrActive) touchHudEl?.classList.remove('hidden');
   setMenuMusicActive(false);
+  setRainActive(true);
 }
 
-btnStartPc.addEventListener('click', startGameFromMenu);
+btnStartPc.addEventListener('click', ()=>startGameFromMenu(false));
 audioPreviewButton?.addEventListener('click', async ()=>{
-  initAudio();
-  setMenuMusicActive(true);
+  initAudio(); setMenuMusicActive(true);
   if(ac?.state === 'suspended') await ac.resume();
   musicTone(146.83, 1.05, 'triangle', 0.075, -0.15);
   musicTone(174.61, 1.25, 'sine', 0.045, 0.12, 0.32);
   musicTone(155.56, 1.4, 'triangle', 0.055, 0, 0.78);
-  musicTone(73.42, 1.8, 'sine', 0.025, 0, 0.12);
   tone(392, 0.5, 'sine', 0.035, 0.72, 0.85, 0.35);
-  if(audioStatusElement) audioStatusElement.textContent = 'PRUEBA: TONOS AMBIENTALES SUAVES Y MOTIVO ORIGINAL';
 });
 document.getElementById('btn-end-restart')?.addEventListener('click', ()=>{
-  gameOverActive = false;
-  gameOverPanel3D.visible = false;
-  startGameFromMenu();
+  gameOverActive = false; gameOverPanel3D.visible = false;
+  startGameFromMenu(mobileVrActive);
 });
 btnRetry.addEventListener('click', ()=>{
-  gameOverActive = false;
-  gameOverPanel3D.visible = false;
-  resetGame();
-  loadRecords();
-  hidePauseUI();
-  endScreen.classList.add('hidden');
-  hudOverlay.classList.add('hidden');
+  gameOverActive = false; gameOverPanel3D.visible = false;
+  if(mobileVrActive) exitMobileVR();
+  resetGame(); loadRecords(); hidePauseUI();
+  endScreen.classList.add('hidden'); hudOverlay.classList.add('hidden'); touchHudEl?.classList.add('hidden');
   startMenu.classList.remove('hidden');
-  setMenuMusicActive(true);
+  setMenuMusicActive(true); setRainActive(false);
 });
 
 function getExpeditionRank(won){
@@ -2019,9 +1846,7 @@ function calculateExpeditionScore(won, elapsed){
   const pagePoints = pagesFound * 120;
   const escapeBonus = won ? 320 : 0;
   const nightmareBonus = (won && isNightmare()) ? 180 : 0;
-  const timeBonus = won
-    ? Math.max(0, Math.round(timeLeft * 1.8))
-    : Math.min(90, Math.round(elapsed * 0.3));
+  const timeBonus = won ? Math.max(0, Math.round(timeLeft * 1.8)) : Math.min(90, Math.round(elapsed * 0.3));
   const sanityBonus = won ? Math.max(0, Math.round(sanity * 1.25)) : 0;
   const batteryBonus = won ? Math.max(0, Math.round(battery * 0.35)) : 0;
   const noisePenalty = timesHeard * 22;
@@ -2034,11 +1859,14 @@ function finishGame(won, reasonText){
   gameOverActive = true;
   paused = true;
   playing = false;
-  setMenuMusicActive(false);
-  hidePauseUI();
-  hideFirstEncounter();
+  pendingDefeatReason = null;
+  stopScreamerSound();
+  screamerTimer = 0; screamMat.opacity = 0;
+  setMenuMusicActive(false); setRainActive(false);
+  hidePauseUI(); hideFirstEncounter();
   vrPromptSprite.visible = false;
   hudOverlay.classList.add('hidden');
+  touchHudEl?.classList.add('hidden');
   pageViewerEl.classList.add('hidden');
   vrPageNotice.visible = false;
 
@@ -2069,16 +1897,13 @@ function finishGame(won, reasonText){
 
   const recMsgEl = document.getElementById('end-record-msg');
   const messages = [];
-
   const scoreStorageKey = `slender_best_score_${modeKey}`;
   const previousBestScore = Number(storageGet(scoreStorageKey) || 0);
   if(score > previousBestScore){
     storageSet(scoreStorageKey, score);
     bestScore = score;
     messages.push('★ NUEVO RÉCORD DE PUNTUACIÓN GUARDADO ★');
-  }else{
-    bestScore = previousBestScore;
-  }
+  } else bestScore = previousBestScore;
 
   if(won){
     const timeKey = `slender_rec_${modeKey}`;
@@ -2100,7 +1925,8 @@ function finishGame(won, reasonText){
     drawVRGameOverPanel(result);
     gameOverPanel3D.visible = true;
     endScreen.classList.add('hidden');
-  }else{
+  } else {
+    if(mobileVrActive) exitMobileVR();
     gameOverPanel3D.visible = false;
     endScreen.classList.remove('hidden');
   }
@@ -2112,10 +1938,12 @@ function resetGame(){
   pagesFound = 0; timeLeft = roundStartTime; sanity = 100;
   battery = 100; stamina = 100; exhausted = false; flashlightOn = true;
   timesHeard = 0; heardCooldown = 0; distanceWalked = 0;
-  paused = false; gameOverActive = false; screamerTimer = 0; nextTpTimer = rand(5.5,9.5) / diffMultiplier;
+  stopScreamerSound();
+  pendingDefeatReason = null;
+  paused = false; gameOverActive = false; screamerTimer = 0; nearScreamCooldown = 0;
+  nextTpTimer = rand(5.5,9.5) / diffMultiplier;
   firstEncounterShown = false; firstEncounterTimer = 0;
-  gameOverPanel3D.visible = false;
-  vrPromptSprite.visible = false;
+  gameOverPanel3D.visible = false; vrPromptSprite.visible = false;
   hideFirstEncounter();
   flashFailTimer = 0; stealthTimer = 0; invertControlsTimer = 0; breathTimer = 0;
   forestEventTimer = rand(15,22) / diffMultiplier; ambientGlitchTimer = 0; ambientApparitionTimer = 0;
@@ -2124,40 +1952,49 @@ function resetGame(){
 
   scene.fog.density = nightmare ? 0.072 : baseFogDensity;
   flashlight.distance = nightmare ? 24 : 36;
-  paintSky(nightmare);
-  resetParticles(nightmare);
-  clearFootprints();
-  updateVhsEffect(0);
-  phantomSlender.visible = false;
-  screamMat.opacity = 0;
-  spawnPages();
-  spawnBatteries();
-  updatePageSignalUI();
+  paintSky(nightmare); resetParticles(nightmare); clearFootprints(); updateVhsEffect(0);
+  phantomSlender.visible = false; screamMat.opacity = 0;
+  spawnPages(); spawnBatteries(); updatePageSignalUI();
   slender.position.set(0,0, nightmare ? -18 : -26);
   dolly.position.set(0,0,6);
   drawPanel();
 }
 resetGame();
 
-/* ================= Audio Terror, Música por Capas y Audio Espacial 3D ================= */
+/* ================= Audio Terror, Música y Audio Espacial 3D ================= */
 let ac, master, musicBus, ambienceBus, effectsBus, noiseBuffer, slenderPosAudio, whisperPosAudio, flashBuzzGain;
-
-// Efectos de sonido y música cargados desde ./assets/audio/
 const customSfx = { trueno: null, lluvia: null, musica: null, pasos: null, screamer: null };
-let rainLoopSource = null;
-let musicLoopSource = null;
-let menuMusicGain = null;
+let rainLoopSource = null, rainLoopGain = null, musicLoopSource = null, menuMusicGain = null, activeScreamerSource = null;
 let lastStepSfxTime = 0;
 
+function stopScreamerSound(){
+  if(activeScreamerSource){
+    try{ activeScreamerSource.stop(); activeScreamerSource.disconnect(); }catch{}
+    activeScreamerSource = null;
+  }
+}
+
+function setRainActive(active){
+  if(!ac) return;
+  if(customSfx.lluvia && !rainLoopSource){
+    rainLoopSource = ac.createBufferSource();
+    rainLoopSource.buffer = customSfx.lluvia;
+    rainLoopSource.loop = true;
+    rainLoopGain = ac.createGain();
+    rainLoopGain.gain.value = active ? 0.85 : 0.0;
+    rainLoopSource.connect(rainLoopGain).connect(ambienceBus);
+    rainLoopSource.start();
+    return;
+  }
+  if(rainLoopGain){
+    const now = ac.currentTime;
+    rainLoopGain.gain.cancelScheduledValues(now);
+    rainLoopGain.gain.setTargetAtTime(active ? 0.85 : 0.0, now, 0.25);
+  }
+}
+
 function isMainMenuVisible(){
-  return Boolean(
-    startMenu &&
-    !startMenu.classList.contains('hidden') &&
-    !playing &&
-    !gameOverActive &&
-    !introSequenceActive &&
-    !renderer.xr.isPresenting
-  );
+  return Boolean(startMenu && !startMenu.classList.contains('hidden') && !playing && !gameOverActive && !introSequenceActive && !renderer.xr.isPresenting);
 }
 
 function setMenuMusicActive(active){
@@ -2171,10 +2008,10 @@ function setMenuMusicActive(active){
 async function loadCustomAudioBuffers(){
   if(!ac) return;
   const files = {
-    trueno:   './assets/audio/trueno.mp3',
-    lluvia:   './assets/audio/lluvia.mp3',
-    musica:   './assets/audio/musica.mp3',
-    pasos:    './assets/audio/pasos.mp3',
+    trueno: './assets/audio/trueno.mp3',
+    lluvia: './assets/audio/lluvia.mp3',
+    musica: './assets/audio/musica.mp3',
+    pasos: './assets/audio/pasos.mp3',
     screamer: './assets/audio/screamer.mp3'
   };
   await Promise.all(Object.entries(files).map(async ([key, url])=>{
@@ -2183,24 +2020,15 @@ async function loadCustomAudioBuffers(){
       if(!res.ok) return;
       const arr = await res.arrayBuffer();
       customSfx[key] = await ac.decodeAudioData(arr);
-    }catch(err){
-      console.warn(`No se pudo cargar ${url}, usando sonido sintetizado de respaldo.`);
-    }
+    }catch{}
   }));
   startAudioLoops();
 }
 
 function startAudioLoops(){
   if(!ac) return;
-  if(customSfx.lluvia && !rainLoopSource){
-    rainLoopSource = ac.createBufferSource();
-    rainLoopSource.buffer = customSfx.lluvia;
-    rainLoopSource.loop = true;
-    const rainGain = ac.createGain();
-    rainGain.gain.value = 0.52;
-    rainLoopSource.connect(rainGain).connect(ambienceBus);
-    rainLoopSource.start();
-  }
+  if(ac.state === 'suspended') ac.resume().catch(()=>{});
+  setRainActive(playing && !paused);
   if(customSfx.musica && !musicLoopSource){
     musicLoopSource = ac.createBufferSource();
     musicLoopSource.buffer = customSfx.musica;
@@ -2216,10 +2044,8 @@ function playCustomBuffer(buffer, bus, volume=0.8, playbackRate=1.0, offset=0, d
   if(!ac || !buffer) return false;
   if(ac.state === 'suspended') ac.resume();
   const src = ac.createBufferSource();
-  src.buffer = buffer;
-  src.playbackRate.value = playbackRate;
-  const g = ac.createGain();
-  g.gain.value = volume;
+  src.buffer = buffer; src.playbackRate.value = playbackRate;
+  const g = ac.createGain(); g.gain.value = volume;
   src.connect(g).connect(bus || effectsBus);
   if(duration !== null) src.start(0, offset, duration);
   else src.start(0, offset);
@@ -2233,15 +2059,9 @@ function initAudio(){
     return;
   }
   ac = new (window.AudioContext||window.webkitAudioContext)();
-  master = ac.createGain();
-  master.gain.value = 0.9;
-  master.connect(ac.destination);
-  musicBus = ac.createGain();
-  ambienceBus = ac.createGain();
-  effectsBus = ac.createGain();
-  musicBus.connect(master);
-  ambienceBus.connect(master);
-  effectsBus.connect(master);
+  master = ac.createGain(); master.gain.value = 0.9; master.connect(ac.destination);
+  musicBus = ac.createGain(); ambienceBus = ac.createGain(); effectsBus = ac.createGain();
+  musicBus.connect(master); ambienceBus.connect(master); effectsBus.connect(master);
   applyAudioMix();
   loadCustomAudioBuffers();
 
@@ -2258,14 +2078,10 @@ function initAudio(){
   slenderPosAudio = new THREE.PositionalAudio(audioListener);
   const posOsc = audioListener.context.createOscillator();
   const posGain = audioListener.context.createGain();
-  posOsc.type = 'sawtooth';
-  posOsc.frequency.value = 52;
-  posGain.gain.value = 0.25;
+  posOsc.type = 'sawtooth'; posOsc.frequency.value = 52; posGain.gain.value = 0.25;
   posOsc.connect(posGain);
   slenderPosAudio.setNodeSource(posOsc);
-  slenderPosAudio.setRefDistance(3);
-  slenderPosAudio.setMaxDistance(28);
-  slenderPosAudio.setRolloffFactor(1.6);
+  slenderPosAudio.setRefDistance(3); slenderPosAudio.setMaxDistance(28); slenderPosAudio.setRolloffFactor(1.6);
   slender.add(slenderPosAudio);
   posOsc.start();
 
@@ -2307,926 +2123,663 @@ function initAudio(){
   radGain.gain.value = 0.018;
   radOscA.connect(radFilter); radOscB.connect(radFilter); radFilter.connect(radGain);
   radioPosAudio.setNodeSource(radGain);
-  radioPosAudio.setRefDistance(2.5);
-  radioPosAudio.setMaxDistance(13);
+  radioPosAudio.setRefDistance(2.5); radioPosAudio.setMaxDistance(13);
   oldRadio.add(radioPosAudio);
   radOscA.start(); radOscB.start();
 
-  const altarPosAudio = new THREE.PositionalAudio(audioListener);
-  const altOsc = audioListener.context.createOscillator();
-  const altGain = audioListener.context.createGain();
-  altOsc.type = 'triangle';
-  altOsc.frequency.value = 65.4;
-  altGain.gain.value = 0.28;
-  altOsc.connect(altGain);
-  altarPosAudio.setNodeSource(altGain);
-  altarPosAudio.setRefDistance(3);
-  altarPosAudio.setMaxDistance(26);
-  altarOrb.add(altarPosAudio);
-  altOsc.start();
+  const flashBuzzOsc = ac.createOscillator();
+  flashBuzzOsc.type = 'sine'; flashBuzzOsc.frequency.value = 120;
+  flashBuzzGain = ac.createGain(); flashBuzzGain.gain.value = 0;
+  flashBuzzOsc.connect(flashBuzzGain).connect(effectsBus);
+  flashBuzzOsc.start();
 
-  const flashOsc = ac.createOscillator();
-  flashBuzzGain = ac.createGain();
-  flashOsc.type = 'sine';
-  flashOsc.frequency.value = 60;
-  flashBuzzGain.gain.value = 0.015;
-  flashOsc.connect(flashBuzzGain).connect(effectsBus);
-  flashOsc.start();
-
-  const droneOsc = ac.createOscillator();
-  const droneHarmonic = ac.createOscillator();
-  const droneGain = ac.createGain();
-  droneOsc.type = 'sine'; droneOsc.frequency.value = 41.2;
-  droneHarmonic.type = 'triangle'; droneHarmonic.frequency.value = 61.7;
-  const lpf = ac.createBiquadFilter();
-  lpf.type = 'lowpass'; lpf.frequency.value = 180;
-  droneGain.gain.value = 0.052;
-  droneOsc.connect(lpf); droneHarmonic.connect(lpf); lpf.connect(droneGain).connect(ambienceBus);
-  droneOsc.start(); droneHarmonic.start();
-
-  const windOscA = ac.createOscillator();
-  const windOscB = ac.createOscillator();
-  const windGain = ac.createGain();
+  const windOsc = ac.createOscillator();
   const windFilter = ac.createBiquadFilter();
-  const windLfo = ac.createOscillator();
-  const windLfoGain = ac.createGain();
-  windOscA.type = 'triangle'; windOscA.frequency.value = 53;
-  windOscB.type = 'sine'; windOscB.frequency.value = 56.5;
-  windFilter.type = 'lowpass'; windFilter.frequency.value = 210;
-  windGain.gain.value = 0.018;
-  windLfo.type = 'sine'; windLfo.frequency.value = 0.12;
-  windLfoGain.gain.value = 0.006;
-  windLfo.connect(windLfoGain).connect(windGain.gain);
-  windOscA.connect(windFilter); windOscB.connect(windFilter); windFilter.connect(windGain).connect(ambienceBus);
-  windOscA.start(); windOscB.start(); windLfo.start();
+  const windGain = ac.createGain();
+  windOsc.type = 'triangle'; windOsc.frequency.value = 72;
+  windFilter.type = 'lowpass'; windFilter.frequency.value = 230; windFilter.Q.value = 0.45;
+  windGain.gain.value = 0.024;
+  windOsc.connect(windFilter).connect(windGain).connect(ambienceBus);
+  windOsc.start();
 
   setInterval(()=>{
-    if(ac.state !== 'running' || !playing || paused) return;
-    const r = Math.random();
-
-    if(currentZone === 'CEMENTERIO' && r < 0.45){
-      const pan = rand(-0.6, 0.6);
-      tone(110, 1.8, 'sine', 0.14, 0.96, 0, pan);
-      tone(220, 1.2, 'triangle', 0.05, 0.95, 0.05, pan);
-      tone(185, 0.32, 'triangle', 0.035, 0.72, 0.12, -pan);
-    } else if(r < 0.32){
-      const pan = rand(-0.85, 0.85);
-      for(let k=0; k<3; k++) tone(2650, 0.03, 'square', 0.025, 0, k*0.07, pan);
-    } else if(r < 0.62){
-      const pan = Math.random() < 0.5 ? -0.88 : 0.88;
-      tone(118, 0.13, 'triangle', 0.055, 0.55, 0, pan);
-      tone(82, 0.18, 'sine', 0.042, 0.7, 0.08, pan);
-    } else if(r < 0.82){
-      const pan = rand(-0.75, 0.75);
-      tone(340, 0.25, 'sine', 0.045, 0.92, 0, pan);
-      tone(285, 0.55, 'sine', 0.045, 0.88, 0.35, pan);
-    } else if(sanity < 75 || isNightmare()){
-      const pan = rand(-0.9, 0.9);
-      tone(180, 0.22, 'sawtooth', 0.05, 1.3, 0, pan);
-      tone(220, 0.28, 'sawtooth', 0.05, 0.7, 0.28, -pan);
-    }
+    if(!ac || ac.state !== 'running') return;
+    const now = ac.currentTime;
+    const isMenu = !playing && !gameOverActive;
+    const targetWind = isMenu ? 0.026 : 0.016 + pagesFound * 0.004;
+    windGain.gain.setTargetAtTime(targetWind, now, 1.4);
+    windOsc.frequency.setTargetAtTime(64 + Math.random() * 24 + pagesFound * 2.5, now, 1.6);
   }, 2400);
 
-  const openingTheme = [146.83, 0, 174.61, 155.56, 0, 130.81, 116.54, 0, 146.83, 0, 196.0, 174.61, 0, 116.54, 130.81, 0];
-  const lowTheme = [73.42, 0, 65.41, 0, 58.27, 0, 69.30, 0];
-  const musicBox = [659.2, 698.5, 466.2, 440.0, 0, 523.3, 493.9, 329.6, 311.1, 0, 220.0, 233.1];
-  const deepHits = [55.0, 0, 51.9, 0, 49.0, 0, 46.2, 43.6];
-  let step = 0;
+  let musicStep = 0;
+  const menuBass = [73.42, 73.42, 65.41, 69.30, 73.42, 61.74, 58.27, 65.41];
+  const menuMotif = [293.66, 329.63, 349.23, 329.63, 293.66, 261.63, 277.18, 220.00];
+  const exploreBass = [73.42, 87.31, 65.41, 82.41, 73.42, 69.30, 58.27, 65.41];
+  const huntBass = [55.00, 58.27, 51.91, 65.41, 55.00, 61.74, 49.00, 58.27];
 
-  function playHorrorMusic(){
-    if(ac.state === 'running' && playing && !paused){
+  setInterval(()=>{
+    if(!ac || ac.state !== 'running' || paused) return;
+    const step = musicStep % 8;
+    const inMenu = !playing && !gameOverActive;
+    if(inMenu){
+      if(customSfx.musica) return;
+      const bassFreq = menuBass[step];
+      musicTone(bassFreq, 1.35, 'sine', 0.055, -0.08);
+      if(step % 2 === 0){
+        const lead = menuMotif[step];
+        musicTone(lead, 1.15, 'triangle', 0.045, step % 4 === 0 ? -0.18 : 0.18, 0.06);
+        musicTone(lead * 1.5, 1.35, 'sine', 0.016, 0, 0.24);
+      }
+      if(step === 3 || step === 7) musicTone(440.00, 0.9, 'sine', 0.018, 0.12, 0.35);
+    } else if(playing){
       camera.getWorldPosition(head);
-      const distanceToSlender = head.distanceTo(slender.position);
-      const tension = Math.max(0, (18 - distanceToSlender) / 18, pagesFound / TOTAL_PAGES, isNightmare() ? 0.55 : 0);
-
-      const themeNote = openingTheme[step % openingTheme.length];
-      if(themeNote > 0){
-        musicTone(themeNote, 0.82, 'triangle', 0.035 + tension * 0.018, (step % 2 ? 0.12 : -0.12));
-        if(step % 4 === 0) musicTone(lowTheme[(step / 2) % lowTheme.length] || 65.41, 1.25, 'sine', 0.024 + tension * 0.012, 0);
-      }
-
-      if(pagesFound >= 2 || isNightmare()){
-        const d = deepHits[step % deepHits.length];
-        if(d > 0) musicTone(d, 0.65, 'sawtooth', 0.055 + pagesFound*0.008 + tension*0.025, 0);
-      }
-
-      if(pagesFound >= 4 || isNightmare()){
-        const n = musicBox[step % musicBox.length];
-        if(n > 0){
-          const detune = (Math.random() - 0.5) * (10 + pagesFound*2 + (isNightmare()?14:0));
-          musicTone(n + detune, 0.55, 'sine', 0.035 + tension*0.012, 0);
-          musicTone((n + detune)*2, 0.25, 'triangle', 0.012 + tension*0.005, 0.1);
-        }
-      }
-
-      if(pagesFound >= 6 && step % 2 === 0){
-        musicTone(880 + (step%3)*62, 0.14, 'sawtooth', 0.024 + tension*0.012, 0);
-      }
-
-      camera.getWorldPosition(head);
-      camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-      for(let i=0; i<pages.length; i++){
-        const p = pages[i];
-        const pDist = Math.hypot(p.m.position.x - head.x, p.m.position.z - head.z);
-        if(pDist < 5.0 && step % 3 === 0){
-          const dx = (p.m.position.x - head.x) / (pDist || 1);
-          const dz = (p.m.position.z - head.z) / (pDist || 1);
-          const pan = fwd.x * dz - fwd.z * dx;
-          tone(1320, 0.04, 'sine', 0.03, 0, 0, pan);
-          break;
-        }
-      }
-
       const dist = head.distanceTo(slender.position);
-      if((dist < 14 || pagesFound >= 4 || isNightmare()) && step % 2 === 0){
-        const vol = Math.min(0.32, (15 - dist) * 0.022 + pagesFound * 0.014 + (isNightmare()?0.04:0));
-        tone(58, 0.11, 'sine', vol, 0.45, 0);
-        tone(48, 0.14, 'sine', vol * 0.85, 0.45, 0.15);
+      const danger = Math.min(1, Math.max((26 - dist) / 22, (62 - sanity) / 62, pagesFound / TOTAL_PAGES));
+      const bassFreq = (danger > 0.56 || isNightmare() ? huntBass : exploreBass)[step];
+      musicTone(bassFreq, 1.15, 'sine', 0.036 + danger * 0.038, -0.05);
+      if(step % 2 === 0){
+        const padFreq = bassFreq * (danger > 0.56 ? 3.17 : 3);
+        musicTone(padFreq, 1.0, 'triangle', 0.018 + danger * 0.02, step % 4 === 0 ? -0.2 : 0.2, 0.08);
       }
-      step++;
     }
-    const tempo = Math.max(190, (520 - pagesFound * 36) / diffMultiplier);
-    setTimeout(playHorrorMusic, tempo);
-  }
-  playHorrorMusic();
+    musicStep++;
+  }, 900);
+
+  setInterval(()=>{
+    if(!playing || paused || !ac || ac.state !== 'running') return;
+    camera.getWorldPosition(head);
+    const dist = head.distanceTo(slender.position);
+    const danger = Math.max(0, (30 - dist) / 30, (65 - sanity) / 65);
+    if(danger > 0.1){
+      const vol = 0.04 + danger * 0.16;
+      tone(58, 0.12, 'sine', vol, 0.72);
+      setTimeout(()=>tone(46, 0.16, 'sine', vol * 0.85, 0.68), 160);
+    }
+  }, 950);
 }
 
-function pannedNoise(dur, freq, vol, panVal=0, when=0){
-  if(!ac || !noiseBuffer) return;
-  const now = ac.currentTime + when;
-  const src = ac.createBufferSource();
-  src.buffer = noiseBuffer;
-  const flt = ac.createBiquadFilter();
-  flt.type = 'bandpass'; flt.frequency.value = Math.min(1500, freq); flt.Q.value = 1.1;
-  const pan = ac.createStereoPanner();
-  pan.pan.value = Math.max(-1, Math.min(1, panVal));
-  const g = ac.createGain();
-  g.gain.setValueAtTime(vol * 0.48, now);
-  g.gain.exponentialRampToValueAtTime(0.001, now + dur);
-  src.connect(flt).connect(pan).connect(g).connect(effectsBus);
-  src.start(now); src.stop(now + dur);
-}
-
-function tone(f,d,type='square',v=.2,slide=0,when=0,panVal=0){
-  if(!ac) return;
-  const o = ac.createOscillator(), g = ac.createGain(), pan = ac.createStereoPanner(), t = ac.currentTime+when;
-  o.type = type; o.frequency.setValueAtTime(f,t);
-  if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(20,f*slide),t+d);
-  pan.pan.setValueAtTime(Math.max(-1, Math.min(1, panVal)), t);
-  g.gain.setValueAtTime(v,t); g.gain.exponentialRampToValueAtTime(.0001,t+d);
-  o.connect(g).connect(pan).connect(effectsBus); o.start(t); o.stop(t+d);
-}
-
-function musicTone(frequency, duration, type='sine', volume=0.04, panValue=0, when=0){
+function musicTone(f, d, type='sine', v=0.05, pan=0, delay=0){
   if(!ac || !musicBus) return;
-  const now = ac.currentTime + when;
-  const oscillator = ac.createOscillator();
-  const filter = ac.createBiquadFilter();
-  const gain = ac.createGain();
-  const panner = ac.createStereoPanner();
-  oscillator.type = type;
-  oscillator.frequency.setValueAtTime(Math.max(20, frequency), now);
-  filter.type = 'lowpass';
-  filter.frequency.setValueAtTime(type === 'triangle' ? 1150 : 1850, now);
-  filter.Q.value = 0.7;
-  panner.pan.setValueAtTime(Math.max(-1, Math.min(1, panValue)), now);
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.linearRampToValueAtTime(Math.max(0.0002, volume), now + Math.min(0.12, duration * 0.22));
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-  oscillator.connect(filter).connect(gain).connect(panner).connect(musicBus);
-  oscillator.start(now);
-  oscillator.stop(now + duration + 0.03);
+  const start = ac.currentTime + delay;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, start);
+  g.gain.setValueAtTime(0.0001, start);
+  g.gain.linearRampToValueAtTime(v, start + Math.min(0.14, d * 0.25));
+  g.gain.exponentialRampToValueAtTime(0.0001, start + d);
+  let node = o;
+  if(ac.createStereoPanner){
+    const panner = ac.createStereoPanner();
+    panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), start);
+    node.connect(panner); node = panner;
+  }
+  node.connect(g).connect(musicBus);
+  o.start(start); o.stop(start + d + 0.03);
+}
+
+function tone(f, d, type='triangle', v=.15, drop=.8, pan=0, delay=0){
+  if(!ac || !effectsBus) return;
+  const start = ac.currentTime + delay;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, start);
+  o.frequency.exponentialRampToValueAtTime(Math.max(22, f*drop), start+d);
+  g.gain.setValueAtTime(0.0001, start);
+  g.gain.linearRampToValueAtTime(v, start + Math.min(0.03, d * 0.2));
+  g.gain.exponentialRampToValueAtTime(.0001, start+d);
+  let node = o;
+  if(ac.createStereoPanner){
+    const panner = ac.createStereoPanner();
+    panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), start);
+    node.connect(panner); node = panner;
+  }
+  node.connect(g).connect(effectsBus);
+  o.start(start); o.stop(start+d+0.02);
 }
 
 function playOriginalSlenderScreamerSound(){
   if(!ac) return;
+  stopScreamerSound();
   if(customSfx.screamer){
-    playCustomBuffer(customSfx.screamer, effectsBus, 0.95, 1.0, 0, 1.8);
+    if(ac.state === 'suspended') ac.resume();
+    const src = ac.createBufferSource();
+    src.buffer = customSfx.screamer;
+    const g = ac.createGain(); g.gain.value = 1.0;
+    src.connect(g).connect(effectsBus);
+    const startOffset = customSfx.screamer.duration > 3.0 ? 0.25 : 0;
+    src.start(0, startOffset, 1.1);
+    activeScreamerSource = src;
+    src.onended = ()=>{ if(activeScreamerSource === src) activeScreamerSource = null; };
     return;
   }
   if(!noiseBuffer) return;
   const now = ac.currentTime;
-
   const staticSrc = ac.createBufferSource();
   staticSrc.buffer = noiseBuffer;
   const staticFilter = ac.createBiquadFilter();
-  staticFilter.type = 'lowpass';
-  staticFilter.frequency.setValueAtTime(1250, now);
-  staticFilter.Q.value = 0.65;
-
+  staticFilter.type = 'lowpass'; staticFilter.frequency.setValueAtTime(1250, now); staticFilter.Q.value = 0.65;
   const staticGain = ac.createGain();
   staticGain.gain.setValueAtTime(0.16, now);
   staticGain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
-
   staticSrc.connect(staticFilter).connect(staticGain).connect(effectsBus);
-  staticSrc.start(now);
-  staticSrc.stop(now + 0.95);
-
-  [55.0, 58.27, 82.41, 116.54, 233.08].forEach(freq=>{
-    tone(freq, 0.72, 'sawtooth', 0.15, 0.78, 0);
-  });
+  staticSrc.start(now); staticSrc.stop(now + 0.95);
+  [55.0, 58.27, 82.41, 116.54, 233.08].forEach(freq=>tone(freq, 0.72, 'sawtooth', 0.15, 0.78, 0));
 }
 
 function sfx(n){
+  initAudio();
+  if(n==='page'){ tone(440,.11,'triangle',.16,1.15); setTimeout(()=>tone(659.25,.18,'triangle',.14,1.1),85); setTimeout(()=>tone(880,.28,'sine',.10,1.02),165); }
+  if(n==='battery'){ tone(392,.09,'sine',.14,1.18); setTimeout(()=>tone(587.33,.16,'triangle',.13,1.12),75); }
+  if(n==='click') tone(520,.035,'triangle',.09,0.72);
+  if(n==='bats') for(let i=0;i<5;i++) setTimeout(()=>tone(360 + Math.random()*160, .06, 'sine', .06, 0.68, (Math.random()-0.5)*1.2), i*55);
   if(n==='step'){
     if(customSfx.pasos){
-      const now = performance.now();
-      if(now - lastStepSfxTime > 360){
+      const now = ac.currentTime;
+      if(now - lastStepSfxTime > 0.28){
         lastStepSfxTime = now;
-        const isSprinting = (keys.shift || vrSprintPressed) && !exhausted;
-        const rate = isSprinting ? rand(1.15, 1.28) : rand(0.92, 1.06);
-        const randomOffset = rand(0, Math.max(0, customSfx.pasos.duration - 0.6));
-        playCustomBuffer(customSfx.pasos, effectsBus, isSprinting ? 0.55 : 0.38, rate, randomOffset, 0.36);
+        const rate = rand(0.92, 1.12);
+        const offset = Math.random() * Math.max(0, customSfx.pasos.duration - 0.5);
+        playCustomBuffer(customSfx.pasos, effectsBus, 0.45, rate, offset, 0.35);
       }
       return;
     }
-    if(currentZone === 'CABAÑA EN RUINAS'){
-      tone(135, 0.08, 'sawtooth', 0.045, 0.75, 0);
-      pannedNoise(0.05, 420, 0.045, 0);
-    } else {
-      pannedNoise(0.055, 680 + rand(-120, 120), 0.05, 0);
-    }
-  }
-  if(n==='breath'){
-    tone(92, 0.30, 'triangle', 0.052, 0.62, 0);
-    tone(68, 0.38, 'sine', 0.045, 0.78, 0.27);
-  }
-  if(n==='spark'){
-    pannedNoise(0.06, 3200, 0.09, 0.25);
-  }
-  if(n==='bats'){
-    for(let i=0; i<5; i++) pannedNoise(0.06, 1200, 0.08, rand(-0.7, 0.7), i*0.07);
-  }
-  if(n==='page'){
-    tone(75, 0.55, 'sawtooth', 0.42, 0.25, 0);
-    tone(48, 0.75, 'square', 0.36, 0.35, 0.04);
-  }
-  if(n==='battery'){
-    tone(520, 0.08, 'square', 0.2);
-    tone(780, 0.12, 'square', 0.2, 0, 0.08);
-  }
-  if(n==='screamer') playOriginalSlenderScreamerSound();
-  if(n==='vanish')   tone(260, 0.5, 'sine', 0.14, 0.3, 0);
-  if(n==='manifestation'){
-    tone(48, 0.85, 'sine', 0.19, 0.58, 0);
-    tone(196, 0.42, 'triangle', 0.075, 0.62, 0.12);
-  }
-  if(n==='whisperCue'){
-    const pan = Math.random() < 0.5 ? -0.8 : 0.8;
-    tone(310, 0.52, 'sine', 0.035, 0.82, 0, pan);
-    tone(233, 0.68, 'triangle', 0.028, 0.76, 0.22, -pan);
-  }
-  if(n==='signal'){
-    tone(980, 0.08, 'square', 0.065, 0.55, 0);
-    tone(420, 0.24, 'sine', 0.07, 0.65, 0.08);
-  }
-  if(n==='distantFootsteps'){
-    const pan = Math.random() < 0.5 ? -0.85 : 0.85;
-    tone(76, 0.16, 'triangle', 0.055, 0.7, 0, pan);
-    tone(92, 0.16, 'triangle', 0.047, 0.68, 0.42, pan * 0.8);
-    tone(68, 0.18, 'sine', 0.04, 0.72, 0.86, pan * 0.6);
+    tone(115 + Math.random()*28, .05, 'sine', .045, 0.62, (Math.random()-0.5)*0.3);
   }
   if(n==='thunder'){
-    if(customSfx.trueno){
-      playCustomBuffer(customSfx.trueno, ambienceBus, 0.75, rand(0.92, 1.08));
-      return;
-    }
-    tone(85, 0.9, 'sawtooth', 0.25, 0.25, 0.15);
-    tone(50, 1.2, 'triangle', 0.3, 0.3, 0.2);
+    if(customSfx.trueno){ playCustomBuffer(customSfx.trueno, ambienceBus, 0.95, rand(0.95, 1.05)); return; }
+    tone(74, 0.95, 'triangle', 0.18, 0.42, -0.15);
+    setTimeout(()=>tone(56, 1.35, 'sine', 0.14, 0.45, 0.25), 220);
   }
-  if(n==='click'){
-    tone(950, 0.04, 'square', 0.18);
-    tone(620, 0.04, 'square', 0.15, 0, 0.04);
-  }
-  if(n==='win')  [220,261.6,329.6,440].forEach((f,i)=>tone(f,.3,'triangle',.2,0,i*.18));
-  if(n==='lose') playOriginalSlenderScreamerSound();
+  if(n==='breath') tone(145, 0.35, 'sine', 0.04, 0.85, 0);
+  if(n==='signal'){ tone(196, 0.34, 'triangle', 0.075, 0.94, -0.2); setTimeout(()=>tone(293.66, 0.42, 'sine', 0.055, 0.98, 0.2), 140); }
+  if(n==='distantFootsteps') [0, 320, 650, 990].forEach((delay, idx)=>setTimeout(()=>tone(84 + idx*4, 0.14, 'sine', 0.09 - idx*0.01, 0.65, idx%2===0 ? -0.35 : 0.35), delay));
+  if(n==='whisperCue'){ tone(146.83, 0.9, 'sine', 0.055, 0.96, -0.5); setTimeout(()=>tone(155.56, 1.1, 'triangle', 0.05, 0.92, 0.5), 160); }
+  if(n==='screamer') playOriginalSlenderScreamerSound();
+  if(n==='branchSnap'){ const pan = Math.random() > 0.5 ? 0.72 : -0.72; tone(240, 0.055, 'triangle', 0.11, 0.36, pan); setTimeout(()=>tone(150, 0.09, 'sine', 0.09, 0.48, pan), 48); }
+  if(n==='crowCall'){ const pan = Math.random() > 0.5 ? -0.68 : 0.68; tone(440, 0.16, 'triangle', 0.075, 0.72, pan); setTimeout(()=>tone(392, 0.19, 'triangle', 0.065, 0.68, pan), 195); }
+  if(n==='manifestation'){ tone(73.42, 0.95, 'sine', 0.095, 0.82, -0.25); tone(110.00, 0.95, 'triangle', 0.07, 0.88, 0.25); }
+  if(n==='win') [293.66,349.23,440,587.33].forEach((f,i)=>setTimeout(()=>tone(f,.42,'triangle',.13,1.03),i*135));
+  if(n==='lose'){ stopScreamerSound(); tone(55, 0.45, 'sawtooth', 0.22, 0.4, 0); }
 }
 
-renderer.xr.addEventListener('sessionstart',()=>{
-  initAudio(); initMicrophone(); gameOverActive = false; gameOverPanel3D.visible = false; resetGame(); playing = true;
-  setMenuMusicActive(false);
-  hidePauseUI();
-  startMenu.classList.add('hidden');
-  endScreen.classList.add('hidden');
-  hudOverlay.classList.remove('hidden');
-});
-renderer.xr.addEventListener('sessionend',()=>{
-  stopMicrophone();
-  playing = false;
-  paused = false;
-  gameOverActive = false;
-  gameOverPanel3D.visible = false;
-  vrPromptSprite.visible = false;
-  hideFirstEncounter();
-  endScreen.classList.add('hidden');
-  hidePauseUI();
-  vrSprintPressed = false;
-  resetGame();
-  loadRecords();
-  startMenu.classList.remove('hidden');
-  hudOverlay.classList.add('hidden');
-  setMenuMusicActive(true);
-  resizeRendererToApp();
+function triggerDeathScreamer(reasonText){
+  if(pendingDefeatReason || gameOverActive) return;
+  pendingDefeatReason = reasonText;
+  screamerTimer = 1.15;
+  updateScreamerPlane(0.016, 1.0, true);
+  sfx('screamer');
+  ctrls.forEach(c => pulse(c, 1.0, 450));
+}
+
+/* ================= Controles VR, PC, Móvil y Cardboard ================= */
+const ctrls = [0,1].map(i=>{
+  const c = renderer.xr.getController(i);
+  const g = new THREE.Group();
+  const h = new THREE.Mesh(new THREE.BoxGeometry(.035,.035,.12), new THREE.MeshLambertMaterial({color:0x22222b}));
+  g.add(h);
+  if(i===0) g.add(panel);
+  c.add(g);
+  dolly.add(c);
+  return c;
 });
 
-/* ================= Controles WebXR para Meta Quest 3S ================= */
-const tmp = new THREE.Vector3(), head = new THREE.Vector3(), fwd = new THREE.Vector3(), right = new THREE.Vector3();
-const moveStep = new THREE.Vector3();
-const toSlenderVector = new THREE.Vector3();
-const phantomDirection = new THREE.Vector3();
-const _itemDir = new THREE.Vector3();
-const UP = new THREE.Vector3(0,1,0);
-const ctrls = [];
-let vrSprintPressed = false;
-let snapLock = false;
-let pauseNavLock = false;
-
-const XR_BUTTON_INDEX = {
-  thumbstick: 3,
-  faceConfirm: 4,
-  faceBack: 5,
-  leftMenu: 7
-};
-
-function pulse(c,i,ms){
-  const actuator = c.userData.src?.gamepad?.hapticActuators?.[0];
-  if(actuator?.pulse) actuator.pulse(i,ms);
-}
-
-function gamepadButtonPressed(gamepad, index){
-  const button = gamepad?.buttons?.[index];
-  return Boolean(button && (button.pressed || (button.value ?? 0) > 0.75));
-}
+function pulse(c, v=.5, d=50){ c?.gamepad?.hapticActuators?.[0]?.pulse?.(v,d); }
 
 function toggleFlashlight(){
-  if(!playing || paused || battery <= 1) return;
+  if(!playing || paused || pendingDefeatReason) return;
+  if(battery <= 0){ sfx('click'); return; }
   flashlightOn = !flashlightOn;
   sfx('click');
-  drawPanel();
-  ctrls.forEach(c=>pulse(c,.4,40));
 }
 
-for(let i=0;i<2;i++){
-  const c = renderer.xr.getController(i);
-  const vis = new THREE.Mesh(new THREE.BoxGeometry(.035,.035,.16), new THREE.MeshBasicMaterial({color:0x222228}));
-  c.add(vis); dolly.add(c);
-  c.userData = {
-    src: null,
-    hand: 'unknown',
-    interactPressed: false,
-    grabPressed: false,
-    faceConfirmPressed: false,
-    previousButtons: {confirm:false, back:false, menu:false, thumbstick:false}
-  };
+function tryInteract(){
+  if(!playing || paused || pendingDefeatReason) return;
+  camera.getWorldPosition(head);
 
-  c.addEventListener('connected',e=>{
-    c.userData.src = e.data;
-    c.userData.hand = e.data.handedness;
-    if(e.data.handedness==='left'){
-      c.add(panel);
-    } else if(e.data.handedness==='right'){
-      flashRig.position.set(0,0,0);
-      c.add(flashRig);
+  for(let i = pages.length - 1; i >= 0; i--){
+    if(pages[i].m.position.distanceTo(head) < 3.0){
+      const collectedTxt = pages[i].txt;
+      scene.remove(pages[i].m);
+      pages.splice(i, 1);
+      pagesFound++;
+      sanity = Math.min(100, sanity + 14);
+      sfx('page');
+      ctrls.forEach(c=>pulse(c, .8, 120));
+      showCollectedPage(collectedTxt, pagesFound);
+      updatePageSignalUI();
+
+      if(pagesFound >= TOTAL_PAGES){
+        sfx('win');
+        finishGame(true, 'ESCAPASTE DEL BOSQUE');
+      } else {
+        nextTpTimer = 1.6;
+        if(pagesFound === 5 && !isNightmare()){
+          paintSky(true); resetParticles(true);
+          scene.fog.density = 0.068; lightningFlash = 0.45;
+          sfx('thunder');
+        }
+      }
+      return;
     }
-  });
+  }
 
-  c.addEventListener('disconnected',()=>{
-    if(c.userData.hand === 'left') vrSprintPressed = false;
-    c.userData.src = null;
-    c.userData.interactPressed = false;
-    c.userData.grabPressed = false;
-    c.userData.faceConfirmPressed = false;
-    c.userData.hand = 'unknown';
-  });
-
-  c.addEventListener('selectstart',()=>{
-    if(!playing || paused) return;
-    initAudio();
-    if(c.userData.hand === 'left'){
-      vrSprintPressed = true;
-    } else if(c.userData.hand === 'right'){
-      c.userData.interactPressed = true;
-      pulse(c,.35,35);
+  for(let i = batteries.length - 1; i >= 0; i--){
+    if(batteries[i].m.position.distanceTo(head) < 2.8){
+      scene.remove(batteries[i].m);
+      batteries.splice(i, 1);
+      battery = Math.min(100, battery + (isNightmare() ? 35 : 50));
+      sfx('battery');
+      ctrls.forEach(c=>pulse(c, .5, 80));
+      return;
     }
-  });
-  c.addEventListener('selectend',()=>{
-    if(c.userData.hand === 'left') vrSprintPressed = false;
-    if(c.userData.hand === 'right') c.userData.interactPressed = false;
-  });
-
-  c.addEventListener('squeezestart',()=>{
-    c.userData.grabPressed = true;
-    pulse(c,.25,30);
-  });
-  c.addEventListener('squeezeend',()=>{ c.userData.grabPressed = false; });
-
-  ctrls.push(c);
+  }
 }
 
-function updateControllerButtons(){
-  for(const c of ctrls){
-    const gamepad = c.userData.src?.gamepad;
-    if(!gamepad) continue;
+ctrls[0].addEventListener('selectstart', ()=>{
+  if(gameOverActive){ handleVRGameOverAction('retry'); return; }
+  if(!playing) return;
+  if(paused){ activatePauseSelection(); return; }
+  togglePause();
+});
+ctrls[1].addEventListener('selectstart', ()=>{
+  if(gameOverActive){ handleVRGameOverAction('retry'); return; }
+  if(!playing) return;
+  if(paused){ activatePauseSelection(); return; }
+  tryInteract();
+});
+ctrls[1].addEventListener('squeezestart', ()=>{
+  if(!playing || paused || pendingDefeatReason) return;
+  toggleFlashlight();
+});
 
-    const confirm = gamepadButtonPressed(gamepad, XR_BUTTON_INDEX.faceConfirm);
-    const back = gamepadButtonPressed(gamepad, XR_BUTTON_INDEX.faceBack);
-    const thumbstick = gamepadButtonPressed(gamepad, XR_BUTTON_INDEX.thumbstick);
-    const menu = c.userData.hand === 'left' && gamepadButtonPressed(gamepad, XR_BUTTON_INDEX.leftMenu);
-    const previous = c.userData.previousButtons;
+const prevButtons = {0: [], 1: []};
+let vrPauseStickReady = true;
+function handleXRButtons(){
+  const session = renderer.xr.getSession();
+  if(!session) return;
+
+  for(const src of session.inputSources){
+    if(!src.gamepad) continue;
+    const h = src.handedness === 'left' ? 0 : (src.handedness === 'right' ? 1 : -1);
+    if(h === -1) continue;
+    const btns = src.gamepad.buttons, axes = src.gamepad.axes, prev = prevButtons[h];
 
     if(gameOverActive){
-      if(confirm && !previous.confirm) handleVRGameOverAction('retry');
-      else if(back && !previous.back) handleVRGameOverAction('menu');
-      previous.confirm = confirm;
-      previous.back = back;
-      previous.menu = menu;
-      previous.thumbstick = thumbstick;
+      if(btns[4]?.pressed && !prev[4]) handleVRGameOverAction('retry');
+      if(btns[5]?.pressed && !prev[5]) handleVRGameOverAction('menu');
+      for(let b=0; b<btns.length; b++) prev[b] = Boolean(btns[b]?.pressed);
       continue;
     }
+    if(h === 0 && btns[3]?.pressed && !prev[3]) togglePause();
+    if(paused){
+      const stickY = axes[3] ?? axes[1] ?? 0;
+      if(Math.abs(stickY) > 0.55){
+        if(vrPauseStickReady){ updatePauseSelection(pauseSelection + (stickY > 0 ? 1 : -1)); vrPauseStickReady = false; }
+      } else vrPauseStickReady = true;
+      if(btns[4]?.pressed && !prev[4]) activatePauseSelection();
+      if(btns[5]?.pressed && !prev[5]) resumeFromPause();
+      for(let b=0; b<btns.length; b++) prev[b] = Boolean(btns[b]?.pressed);
+      continue;
+    }
+    if(h === 1 && btns[4]?.pressed && !prev[4]) tryInteract();
+    if(h === 1 && btns[5]?.pressed && !prev[5]) toggleFlashlight();
+    if(h === 0 && btns[4]?.pressed && !prev[4]) togglePause();
+    for(let b=0; b<btns.length; b++) prev[b] = Boolean(btns[b]?.pressed);
+  }
+}
 
-    c.userData.faceConfirmPressed = confirm && !paused;
+renderer.xr.addEventListener('sessionstart', ()=>{
+  if(mobileVrActive) exitMobileVR();
+  initAudio(); initMicrophone(); resetGame();
+  playing = true; paused = false;
+  setMenuMusicActive(false); setRainActive(true); hidePauseUI();
+  startMenu.classList.add('hidden'); endScreen.classList.add('hidden'); hudOverlay.classList.add('hidden'); touchHudEl?.classList.add('hidden');
+  flashRig.position.set(0.02, -0.02, -0.06);
+  ctrls[1].add(flashRig);
+});
 
-    if(menu && !previous.menu && playing){
-      togglePause();
-    }
-    if(back && !previous.back){
-      if(paused) resumeFromPause();
-      else if(playing) pageViewerEl.classList.add('hidden');
-    }
-    if(confirm && !previous.confirm && paused){
-      activatePauseSelection();
-    }
-    if(thumbstick && !previous.thumbstick && c.userData.hand === 'right'){
-      toggleFlashlight();
-    }
+renderer.xr.addEventListener('sessionend', ()=>{
+  playing = false; paused = false; gameOverActive = false; pendingDefeatReason = null;
+  stopScreamerSound(); setRainActive(false);
+  gameOverPanel3D.visible = false; vrPromptSprite.visible = false;
+  hidePauseUI(); hideFirstEncounter(); stopMicrophone();
+  flashRig.position.set(0.24, -0.22, -0.32);
+  camera.add(flashRig);
+  loadRecords();
+  hudOverlay.classList.add('hidden'); endScreen.classList.add('hidden'); startMenu.classList.remove('hidden');
+  setMenuMusicActive(true);
+});
 
-    if(paused && c.userData.hand === 'left'){
-      const navY = gamepad.axes[3] ?? gamepad.axes[1] ?? 0;
-      if(Math.abs(navY) > 0.7 && !pauseNavLock){
-        updatePauseSelection(pauseSelection + (navY > 0 ? 1 : -1));
-        pauseNavLock = true;
-      } else if(Math.abs(navY) < 0.25){
-        pauseNavLock = false;
+const keys = {}; let yaw = 0, pitch = 0, lastTouch = null;
+const touchState = {moveId: null, lookId: null, startX: 0, startY: 0, x: 0, y: 0, lastLookX: 0, lastLookY: 0};
+const touchHudEl = document.getElementById('touch-hud');
+const touchJoystickEl = document.getElementById('touch-joystick');
+const touchKnobEl = document.getElementById('touch-joystick-knob');
+const btnTouchInteract = document.getElementById('btn-touch-interact');
+const btnTouchFlash = document.getElementById('btn-touch-flash');
+const btnTouchSprint = document.getElementById('btn-touch-sprint');
+const btnTouchPause = document.getElementById('btn-touch-pause');
+const btnHudPause = document.getElementById('btn-hud-pause');
+const btnHudFlash = document.getElementById('btn-hud-flash');
+let touchSprintActive = false;
+
+function updateTouchKnob(dx, dy){
+  if(touchKnobEl) touchKnobEl.style.transform = `translate(${dx * 30}px, ${dy * 30}px)`;
+}
+
+touchJoystickEl?.addEventListener('pointerdown', (e)=>{
+  if(touchState.moveId !== null) return;
+  touchState.moveId = e.pointerId;
+  touchState.startX = e.clientX;
+  touchState.startY = e.clientY;
+  touchJoystickEl.setPointerCapture?.(e.pointerId);
+});
+
+touchJoystickEl?.addEventListener('pointermove', (e)=>{
+  if(e.pointerId !== touchState.moveId) return;
+  const maxR = 44;
+  const rawX = e.clientX - touchState.startX;
+  const rawY = e.clientY - touchState.startY;
+  const dist = Math.hypot(rawX, rawY) || 1;
+  const clamped = Math.min(maxR, dist);
+  touchState.x = (rawX / dist) * (clamped / maxR);
+  touchState.y = (rawY / dist) * (clamped / maxR);
+  updateTouchKnob(touchState.x, touchState.y);
+});
+
+function releaseTouchJoystick(e){
+  if(e.pointerId !== touchState.moveId) return;
+  touchState.moveId = null; touchState.x = 0; touchState.y = 0;
+  updateTouchKnob(0, 0);
+}
+touchJoystickEl?.addEventListener('pointerup', releaseTouchJoystick);
+touchJoystickEl?.addEventListener('pointercancel', releaseTouchJoystick);
+
+btnTouchInteract?.addEventListener('click', ()=>{ if(playing && !paused) tryInteract(); });
+btnTouchFlash?.addEventListener('click', ()=>{ if(playing && !paused) toggleFlashlight(); });
+btnHudFlash?.addEventListener('click', ()=>{ if(playing && !paused) toggleFlashlight(); });
+btnHudPause?.addEventListener('click', ()=>{ if(playing) togglePause(); });
+btnTouchPause?.addEventListener('click', ()=>{ if(playing) togglePause(); });
+btnTouchSprint?.addEventListener('pointerdown', ()=>{ touchSprintActive = true; btnTouchSprint.classList.add('active'); });
+['pointerup','pointercancel','pointerleave'].forEach(ev=>{
+  btnTouchSprint?.addEventListener(ev, ()=>{ touchSprintActive = false; btnTouchSprint.classList.remove('active'); });
+});
+
+// Botón único de Google Cardboard / toque en pantalla en Móvil VR
+let cardBoardWalkPressed = false, cardBoardTapTime = 0;
+renderer.domElement.addEventListener('pointerdown', ()=>{
+  if(!mobileVrActive || !playing || paused) return;
+  cardBoardWalkPressed = true;
+  cardBoardTapTime = performance.now();
+});
+renderer.domElement.addEventListener('pointerup', ()=>{
+  if(!mobileVrActive) return;
+  cardBoardWalkPressed = false;
+  if(performance.now() - cardBoardTapTime < 260) tryInteract();
+});
+
+window.addEventListener('keydown', e=>{
+  if(introSequenceActive){
+    if(e.code === 'Escape' || e.code === 'Space' || e.code === 'Enter'){ e.preventDefault(); skipCinematicIntro(); }
+    return;
+  }
+  if(e.code === 'Escape' || e.code === 'KeyP'){
+    if(playing){ e.preventDefault(); togglePause(); }
+    return;
+  }
+  if(paused){
+    if(e.code === 'ArrowUp' || e.code === 'KeyW'){ e.preventDefault(); updatePauseSelection(pauseSelection - 1); }
+    else if(e.code === 'ArrowDown' || e.code === 'KeyS'){ e.preventDefault(); updatePauseSelection(pauseSelection + 1); }
+    else if(e.code === 'Enter' || e.code === 'Space' || e.code === 'KeyE'){ e.preventDefault(); activatePauseSelection(); }
+    return;
+  }
+  keys[e.code]=true;
+  if(e.code==='KeyE' || e.code==='Space') tryInteract();
+  if(e.code==='KeyF') toggleFlashlight();
+  if(e.code==='KeyR' && !playing && !endScreen.classList.contains('hidden')) startGameFromMenu(mobileVrActive);
+});
+window.addEventListener('keyup', e=>keys[e.code]=false);
+
+renderer.domElement.addEventListener('click', ()=>{
+  if(playing && !paused && !renderer.xr.isPresenting && !isMobileDevice()) renderer.domElement.requestPointerLock?.();
+});
+window.addEventListener('mousemove', e=>{
+  if(!playing || paused || pendingDefeatReason || mobileVrActive) return;
+  if(document.pointerLockElement===renderer.domElement){
+    yaw -= e.movementX*.0024;
+    pitch = Math.max(-1.2, Math.min(1.2, pitch - e.movementY*.0024));
+  }
+});
+renderer.domElement.addEventListener('touchstart', e=>{
+  if(!playing || paused || pendingDefeatReason || mobileVrActive) return;
+  for(const t of e.changedTouches){
+    if(touchState.lookId === null && t.clientX > window.innerWidth * 0.34){
+      touchState.lookId = t.pointerId ?? t.identifier;
+      touchState.lastLookX = t.clientX;
+      touchState.lastLookY = t.clientY;
+    }
+  }
+  lastTouch = e.touches[0];
+}, {passive:true});
+renderer.domElement.addEventListener('touchmove', e=>{
+  if(!playing || paused || pendingDefeatReason || mobileVrActive) return;
+  for(const t of e.changedTouches){
+    const id = t.pointerId ?? t.identifier;
+    if(id === touchState.lookId){
+      yaw -= (t.clientX - touchState.lastLookX) * 0.0046;
+      pitch = Math.max(-1.2, Math.min(1.2, pitch - (t.clientY - touchState.lastLookY) * 0.0042));
+      touchState.lastLookX = t.clientX;
+      touchState.lastLookY = t.clientY;
+      return;
+    }
+  }
+  if(!lastTouch || touchState.lookId !== null) return;
+  const t = e.touches[0];
+  yaw -= (t.clientX-lastTouch.clientX)*.004;
+  pitch = Math.max(-1.2, Math.min(1.2, pitch - (t.clientY-lastTouch.clientY)*.004));
+  lastTouch = t;
+}, {passive:true});
+renderer.domElement.addEventListener('touchend', e=>{
+  for(const t of e.changedTouches){
+    const id = t.pointerId ?? t.identifier;
+    if(id === touchState.lookId) touchState.lookId = null;
+  }
+  if(e.touches.length === 0) lastTouch = null;
+}, {passive:true});
+
+/* ================= Movimiento y Colisiones ================= */
+const fwd = new THREE.Vector3(), right = new THREE.Vector3(), head = new THREE.Vector3(), look = new THREE.Vector3();
+
+function updateZoneName(x, z){
+  if(Math.hypot(x - cemCenter.x, z - cemCenter.z) < 20) currentZone = 'CEMENTERIO ANTIGUO';
+  else if(Math.hypot(x - ruinCenter.x, z - ruinCenter.z) < 15) currentZone = 'CABAÑA EN RUINAS';
+  else if(Math.hypot(x - ritualCenter.x, z - ritualCenter.z) < 16) currentZone = 'ALTAR DE MONOLITOS';
+  else currentZone = 'BOSQUE OSCURO';
+}
+
+function updateMove(dt){
+  if(!renderer.xr.isPresenting){
+    if(mobileVrActive){
+      updateGyroCamera();
+    } else {
+      camera.rotation.order='YXZ';
+      camera.rotation.y = yaw;
+      camera.rotation.x = pitch;
+    }
+  }
+
+  let mx = 0, mz = 0, wantsSprint = false;
+  if(renderer.xr.isPresenting){
+    const s = renderer.xr.getSession();
+    if(s) for(const src of s.inputSources){
+      if(!src.gamepad) continue;
+      if(src.handedness==='left'){
+        mx = src.gamepad.axes[2]||0;
+        mz = src.gamepad.axes[3]||0;
+        if(src.gamepad.buttons[3]?.pressed) wantsSprint = true;
+      }
+      if(src.handedness==='right' && Math.abs(src.gamepad.axes[2]||0)>.25){
+        dolly.rotation.y -= src.gamepad.axes[2]*1.9*dt;
       }
     }
-
-    previous.confirm = confirm;
-    previous.back = back;
-    previous.menu = menu;
-    previous.thumbstick = thumbstick;
+  } else {
+    mx = (keys.KeyD||keys.ArrowRight?1:0) - (keys.KeyA||keys.ArrowLeft?1:0) + touchState.x;
+    mz = (keys.KeyS||keys.ArrowDown?1:0) - (keys.KeyW||keys.ArrowUp?1:0) + touchState.y;
+    if(mobileVrActive && cardBoardWalkPressed) mz = -1;
+    if(keys.ShiftLeft || keys.ShiftRight || touchSprintActive) wantsSprint = true;
   }
-}
-
-function snapTurn(a){
-  camera.getWorldPosition(head); const px = head.x, pz = head.z;
-  dolly.rotation.y += a; camera.getWorldPosition(head);
-  dolly.position.x += px-head.x; dolly.position.z += pz-head.z;
-}
-
-const keys = {};
-addEventListener('keydown',e=>{
-  const k = e.key.toLowerCase();
-  if(['arrowleft','arrowright','arrowup','arrowdown'].includes(k)) e.preventDefault();
-
-  if(k === 'escape'){
-    e.preventDefault();
-    togglePause();
-    return;
-  }
-  if(paused && (k === 'arrowup' || k === 'arrowdown')){
-    e.preventDefault();
-    updatePauseSelection(pauseSelection + (k === 'arrowdown' ? 1 : -1));
-    return;
-  }
-  if(paused && k === 'enter'){
-    e.preventDefault();
-    activatePauseSelection();
-    return;
-  }
-  if(k === 'backspace'){
-    e.preventDefault();
-    if(paused) resumeFromPause();
-    else if(playing) pageViewerEl.classList.add('hidden');
-    return;
-  }
-
-  keys[k] = true;
-  if(!playing || paused) return;
-  initAudio();
-  if(k === 'f') toggleFlashlight();
-});
-addEventListener('keyup',e=>keys[e.key.toLowerCase()] = false);
-
-function clearDesktopInputs(){
-  for(const key of Object.keys(keys)) keys[key] = false;
-}
-window.addEventListener('blur', clearDesktopInputs);
-document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){
-    clearDesktopInputs();
-    if(playing && !paused && !renderer.xr.isPresenting) togglePause();
-  }
-});
-
-function move(dt){
-  if(!playing || paused) return;
-  if(invertControlsTimer > 0) invertControlsTimer -= dt;
-
-  camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize(); right.crossVectors(fwd,UP);
-  let mx = 0, mz = 0;
-  const s = renderer.xr.getSession?.();
-  if(s) for(const src of s.inputSources){
-    const gp = src.gamepad; if(!gp) continue;
-    const x = gp.axes[2] ?? gp.axes[0], y = gp.axes[3] ?? gp.axes[1];
-    if(src.handedness==='left'){ if(Math.abs(x)>.15) mx = x; if(Math.abs(y)>.15) mz = -y; }
-    else if(src.handedness==='right'){
-      if(Math.abs(x)>.7){ if(!snapLock){ snapTurn(-Math.sign(x)*Math.PI/6); snapLock = true; } } else snapLock = false;
-    }
-  }
-  if(keys.w) mz = 1; if(keys.s) mz = -1; if(keys.d) mx = 1; if(keys.a) mx = -1;
-  if(keys.arrowleft) dolly.rotation.y += dt*1.8;
-  if(keys.arrowright) dolly.rotation.y -= dt*1.8;
 
   if(invertControlsTimer > 0){
-    mx = -mx;
-    mz = -mz;
+    invertControlsTimer -= dt;
+    mx = -mx; mz = -mz;
   }
 
-  const isMoving = Math.hypot(mx, mz) > 0.1;
-  const wantsSprint = (keys.shift || vrSprintPressed) && isMoving && !exhausted && stamina > 0;
+  const isMoving = (Math.abs(mx) > 0.1 || Math.abs(mz) > 0.1);
+  let speed = WALK_SPEED;
 
-  if(wantsSprint){
-    stamina = Math.max(0, stamina - (isNightmare() ? 32 : 26) * dt);
-    if(stamina <= 0) exhausted = true;
+  if(wantsSprint && isMoving && !exhausted && stamina > 0){
+    speed = SPRINT_SPEED;
+    stamina = Math.max(0, stamina - (isNightmare() ? 22 : 16) * dt);
+    if(stamina === 0) exhausted = true;
   } else {
-    stamina = Math.min(100, stamina + (exhausted ? 12 : 18) * dt);
-    if(exhausted && stamina >= 45) exhausted = false;
+    const regenRate = isMoving ? 10 : 20;
+    stamina = Math.min(100, stamina + regenRate * dt);
+    if(exhausted && stamina >= 30) exhausted = false;
   }
 
-  if(exhausted || stamina < 25){
+  if(stamina < 35){
     breathTimer -= dt;
-    if(breathTimer <= 0){
-      sfx('breath');
-      breathTimer = exhausted ? 1.35 : 1.9;
+    if(breathTimer <= 0){ sfx('breath'); breathTimer = 1.6; }
+  }
+
+  if(isMoving){
+    camera.getWorldDirection(fwd); fwd.y=0; fwd.normalize();
+    right.crossVectors(fwd, THREE.Object3D.DEFAULT_UP).normalize();
+    const moveVec = new THREE.Vector3()
+      .addScaledVector(right, mx)
+      .addScaledVector(fwd, -mz)
+      .clampLength(0, 1)
+      .multiplyScalar(speed * dt);
+
+    const nx = dolly.position.x + moveVec.x;
+    const nz = dolly.position.z + moveVec.z;
+    if(Math.hypot(nx, nz) < MAP_R - 1.5){
+      dolly.position.x = nx;
+      dolly.position.z = nz;
+    }
+
+    const stepDist = moveVec.length();
+    distanceWalked += stepDist;
+    stepAccum += stepDist;
+
+    const stride = (speed > WALK_SPEED) ? 1.55 : 1.15;
+    if(stepAccum >= stride){
+      stepAccum = 0;
+      camera.getWorldPosition(head);
+      spawnFootprint(head, Math.atan2(fwd.x, fwd.z));
+      sfx('step');
     }
   }
-
-  const curSpeed = wantsSprint ? SPRINT_SPEED : (exhausted ? WALK_SPEED * 0.72 : WALK_SPEED);
-  const stepVec = moveStep.set(0,0,0).addScaledVector(fwd, mz * curSpeed * dt).addScaledVector(right, mx * curSpeed * dt);
-  dolly.position.add(stepVec);
-
-  const stepLen = stepVec.length();
-  distanceWalked += stepLen;
-  stepAccum += stepLen;
 
   camera.getWorldPosition(head);
   for(let i=0; i<colliders.length; i++){
     const c = colliders[i];
-    const dx = head.x-c.x, dz = head.z-c.z;
-    const min = c.r+.35;
-    if(Math.abs(dx) > min || Math.abs(dz) > min) continue;
-    const d = Math.hypot(dx,dz);
-    if(d<min && d>0.001){ dolly.position.x += dx/d*(min-d); dolly.position.z += dz/d*(min-d); }
+    const dx = head.x - c.x, dz = head.z - c.z;
+    const dSq = dx*dx + dz*dz;
+    const minDist = c.r + .42;
+    if(dSq < minDist * minDist && dSq > 0.00001){
+      const d = Math.sqrt(dSq);
+      const push = (minDist - d) / d;
+      dolly.position.x += dx * push;
+      dolly.position.z += dz * push;
+    }
   }
-
-  camera.getWorldPosition(head);
-  const dd = Math.hypot(head.x, head.z);
-  if(dd > MAP_R - 0.8){
-    const k = (MAP_R - 0.8) / dd;
-    dolly.position.x -= head.x * (1 - k);
-    dolly.position.z -= head.z * (1 - k);
-  }
-
-  if(stepAccum >= 0.65){
-    stepAccum = 0;
-    const heading = Math.atan2(-fwd.x, -fwd.z);
-    spawnFootprint(head, heading);
-    sfx('step');
-  }
-
-  let newZone = 'BOSQUE OSCURO';
-  if(Math.hypot(head.x - cemCenter.x, head.z - cemCenter.z) < 22) newZone = 'CEMENTERIO';
-  else if(Math.hypot(head.x - ruinCenter.x, head.z - ruinCenter.z) < 16) newZone = 'CABAÑA EN RUINAS';
-  else if(Math.hypot(head.x - ritualCenter.x, head.z - ritualCenter.z) < 17) newZone = 'ALTAR RITUAL';
-  if(newZone !== currentZone){
-    currentZone = newZone;
-    drawPanel();
-  }
+  updateZoneName(head.x, head.z);
 }
 
-/* ================= Lógica de Pilas, Páginas Ocultas y Dificultad (Sin Asignaciones) ================= */
-function updateItems(t){
+/* ================= IA de SLENDERMAN ================= */
+function teleportSlender(nearPlayer){
   camera.getWorldPosition(head);
-  camera.getWorldDirection(fwd);
+  camera.getWorldDirection(look); look.y=0; look.normalize();
+  const baseAngle = Math.atan2(look.z, look.x);
+  const spread = nearPlayer ? rand(-1.0, 1.0) : rand(-Math.PI, Math.PI);
+  const angle = baseAngle + spread;
+  const dist = nearPlayer ? rand(5.5, 11.5) : rand(14, 26);
 
-  const inVR = renderer.xr.isPresenting;
-  const anyConfirmPressed = ctrls.some(c=>c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed);
-  let promptTarget = null;
-  let promptOffset = 0.35;
-
-  for(let i=batteries.length-1; i>=0; i--){
-    const b = batteries[i];
-    b.m.rotation.y = t * 2.2 + b.phase;
-    b.m.position.y = 0.25 + Math.sin(t * 3 + b.phase) * 0.05;
-
-    const dx = b.m.position.x - head.x;
-    const dz = b.m.position.z - head.z;
-    const horizDist = Math.hypot(dx, dz);
-    if(horizDist > 2.5) continue;
-
-    _itemDir.subVectors(b.m.position, head).normalize();
-    const lookingAtBattery = horizDist < 1.85 && fwd.dot(_itemDir) > 0.15;
-
-    let handNearBattery = false;
-    let handAction = false;
-    if(inVR){
-      for(let k=0; k<ctrls.length; k++){
-        const c = ctrls[k];
-        c.getWorldPosition(tmp);
-        if(tmp.distanceToSquared(b.m.position) < 1.3225){
-          handNearBattery = true;
-          if(c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed){
-            handAction = true;
-          }
-        }
-      }
-    }
-
-    if(inVR && (lookingAtBattery || handNearBattery) && !promptTarget){
-      promptTarget = b.m.position;
-      promptOffset = 0.32;
-    }
-
-    let takeBat = !inVR && horizDist < 1.35;
-    if(inVR && ((handNearBattery && handAction) || (lookingAtBattery && anyConfirmPressed))){
-      takeBat = true;
-    }
-
-    if(takeBat && playing && !paused){
-      scene.remove(b.m); batteries.splice(i, 1);
-      battery = Math.min(100, battery + (isNightmare() ? 30 : 40));
-      sfx('battery');
-      drawPanel();
-      ctrls.forEach(c=>pulse(c, .6, 120));
-    }
-  }
-
-  for(let i=pages.length-1;i>=0;i--){
-    const p = pages[i];
-    const dx = p.m.position.x - head.x;
-    const dz = p.m.position.z - head.z;
-    const horizDist = Math.hypot(dx, dz);
-    if(horizDist > 2.5) continue;
-
-    _itemDir.subVectors(p.m.position, head).normalize();
-    const dist = p.m.position.distanceTo(head);
-    const lookingAtPage = horizDist < 1.75 && fwd.dot(_itemDir) > 0.35;
-
-    let handNearPage = false;
-    let handAction = false;
-    if(inVR){
-      for(let k=0; k<ctrls.length; k++){
-        const c = ctrls[k];
-        c.getWorldPosition(tmp);
-        if(tmp.distanceToSquared(p.m.position) < 0.9025){
-          handNearPage = true;
-          if(c.userData.interactPressed || c.userData.faceConfirmPressed || c.userData.grabPressed){
-            handAction = true;
-          }
-        }
-      }
-    }
-
-    if(inVR && (lookingAtPage || handNearPage) && !promptTarget){
-      promptTarget = p.m.position;
-      promptOffset = 0.36;
-    }
-
-    let got = !inVR && dist < 1.45 && fwd.dot(_itemDir) > 0.40;
-    if(inVR && ((lookingAtPage && anyConfirmPressed) || (handNearPage && handAction))){
-      got = true;
-    }
-
-    if(got && playing && !paused){
-      scene.remove(p.m); pages.splice(i,1);
-      pagesFound++;
-      sfx('page');
-      showCollectedPage(p.txt, pagesFound);
-      drawPanel();
-      ctrls.forEach(c=>pulse(c,.85,180));
-
-      const baseFog = isNightmare() ? 0.072 : baseFogDensity;
-      scene.fog.density = baseFog + (pagesFound * 0.0045);
-      flashFailTimer = 0.45 + pagesFound * 0.08;
-
-      if(pagesFound === 6 && !isNightmare()){
-        paintSky(true);
-        resetParticles(true);
-      }
-
-      const spawnDist = Math.max(5.5, (20 - pagesFound * 1.6) / diffMultiplier);
-      teleportSlender(spawnDist);
-      nextTpTimer = rand(6.2, 10.8) / diffMultiplier - pagesFound * 0.16;
-
-      if(pagesFound >= TOTAL_PAGES){
-        sfx('win'); drawPanel('ESCAPASTE!');
-        finishGame(true, isNightmare() ? '¡SOBREVIVISTE A LA PESADILLA!' : '¡RECOLECTASTE LAS 8 NOTAS Y ESCAPASTE!');
-      }
-    }
-  }
-
-  if(inVR && promptTarget && playing && !paused){
-    vrPromptSprite.visible = true;
-    vrPromptSprite.position.set(
-      promptTarget.x,
-      promptTarget.y + promptOffset + Math.sin(t * 6) * 0.02,
-      promptTarget.z
-    );
-  } else {
-    vrPromptSprite.visible = false;
-  }
-}
-
-function teleportSlender(distFromPlayer, preferOffscreen=true){
-  camera.getWorldPosition(head);
-  camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-  const facingAngle = Math.atan2(fwd.z, fwd.x);
-  const ang = preferOffscreen && Math.random() < 0.68
-    ? facingAngle + Math.PI + rand(-1.05, 1.05)
-    : rand(0, Math.PI * 2);
-  let nx = head.x + Math.cos(ang)*distFromPlayer;
-  let nz = head.z + Math.sin(ang)*distFromPlayer;
-  const d = Math.hypot(nx, nz);
-  if(d > MAP_R - 2){
-    nx *= (MAP_R - 2) / d;
-    nz *= (MAP_R - 2) / d;
-  }
-  slender.position.set(nx, 0, nz);
-  slender.lookAt(head.x, 0, head.z);
-  stealthTimer = 0;
-}
-
-function triggerForestEvent(){
-  camera.getWorldPosition(head);
-  camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-  const roll = Math.random();
-  if(roll < 0.34){
-    teleportSlender(rand(10.5, 17), true);
-    nextTpTimer = rand(7.5, 12.5) / diffMultiplier;
-    ambientGlitchTimer = rand(0.9, 1.55);
-    sfx('manifestation');
-  }else if(roll < 0.60){
-    const baseAngle = Math.atan2(fwd.z, fwd.x);
-    const angle = baseAngle + rand(-1.15, 1.15);
-    const radius = rand(8, 13);
-    let x = head.x + Math.cos(angle) * radius;
-    let z = head.z + Math.sin(angle) * radius;
-    const mapDistance = Math.hypot(x,z);
-    if(mapDistance > MAP_R - 3){ x *= (MAP_R - 3) / mapDistance; z *= (MAP_R - 3) / mapDistance; }
-    phantomSlender.position.set(x,0,z);
-    phantomSlender.lookAt(head.x,0,head.z);
-    phantomSlender.visible = true;
-    ambientApparitionTimer = rand(0.85,1.5);
-    phantomTimer = ambientApparitionTimer;
-    ambientGlitchTimer = rand(0.55,0.95);
-    sfx('whisperCue');
-  }else if(roll < 0.82){
-    ambientGlitchTimer = rand(0.5,1.25);
-    flashFailTimer = Math.max(flashFailTimer, rand(0.18,0.38));
-    sfx('signal');
-  }else{
-    ambientGlitchTimer = rand(0.2,0.55);
-    sfx('distantFootsteps');
-  }
+  let sx = head.x + Math.cos(angle) * dist;
+  let sz = head.z + Math.sin(angle) * dist;
+  const rad = Math.hypot(sx, sz);
+  if(rad > MAP_R - 3){ sx *= (MAP_R - 3) / rad; sz *= (MAP_R - 3) / rad; }
+  slender.position.set(sx, 0, sz);
 }
 
 function triggerScreamer(){
-  screamerTimer = 0.95;
-  if(isNightmare()) invertControlsTimer = 3.5;
+  screamerTimer = 0.72;
   sfx('screamer');
-  ctrls.forEach(c=>pulse(c, 1.0, 500));
-  camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-  camera.getWorldPosition(head);
-  slender.position.set(head.x + fwd.x*1.3, 0, head.z + fwd.z*1.3);
-  slender.lookAt(head.x, 0, head.z);
+  ctrls.forEach(c=>pulse(c, 1.0, 320));
+  if(isNightmare()) invertControlsTimer = 3.2;
 }
 
 function updateSlender(dt, t){
+  if(pendingDefeatReason) return;
   camera.getWorldPosition(head);
-  camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-
-  const dx = head.x - slender.position.x, dz = head.z - slender.position.z;
-  const dist = Math.hypot(dx,dz);
+  camera.getWorldDirection(look);
+  const toSlender = slender.position.clone().sub(head).normalize();
+  const lookingAtHim = look.dot(toSlender) > .70;
+  const dist = head.distanceTo(slender.position);
   const nightmare = isNightmare();
 
-  ambientGlitchTimer = Math.max(0, ambientGlitchTimer - dt);
-  if(ambientApparitionTimer > 0) ambientApparitionTimer = Math.max(0, ambientApparitionTimer - dt);
-  forestEventTimer -= dt;
-  const elapsedRound = roundStartTime - timeLeft;
-  if(forestEventTimer <= 0 && elapsedRound > 12){
-    triggerForestEvent();
-    forestEventTimer = rand(nightmare ? 13 : 18, nightmare ? 22 : 31) / diffMultiplier - pagesFound * 0.32;
-  }
-
   if(heardCooldown > 0) heardCooldown -= dt;
-  const makingNoise = micReady && micLevel > getNoiseThreshold();
-  const hearRange = nightmare ? 48 : 38;
-  if(makingNoise && dist < hearRange){
-    stealthTimer = 0;
-    if(heardCooldown <= 0){
-      timesHeard++;
-      heardCooldown = nightmare ? 2.5 : 3.5;
-    }
-    if(dist > 10){
-      teleportSlender(nightmare ? rand(5.2, 8.5) : rand(6.5, 10.5));
-      nextTpTimer = rand(5.8, 9.2) / diffMultiplier;
-    }
+  if(nearScreamCooldown > 0) nearScreamCooldown -= dt;
+
+  if(((dist < 9.5) || (lookingAtHim && dist < 13.0)) && nearScreamCooldown <= 0 && screamerTimer <= 0){
+    sfx('screamer');
+    ambientGlitchTimer = Math.max(ambientGlitchTimer, 0.85);
+    nearScreamCooldown = nightmare ? 7.5 : 10.5;
   }
 
-  const chaseLimit = nightmare ? 4 : 6;
-  const stealthNeeded = nightmare ? 4.0 : 2.4;
-  const isHidden = !flashlightOn && !makingNoise && pagesFound < chaseLimit;
-  if(isHidden && dist < 18){
-    stealthTimer += dt;
-    if(stealthTimer >= stealthNeeded){
-      sfx('vanish');
-      teleportSlender(rand(28, 38));
-      nextTpTimer = rand(6.5, 11.5) / diffMultiplier;
-      stealthTimer = 0;
-      return;
-    }
-  } else {
-    stealthTimer = Math.max(0, stealthTimer - dt * 1.5);
+  if(!firstEncounterShown && dist < 24 && lookingAtHim) showFirstEncounter();
+
+  const thresh = getNoiseThreshold();
+  const hearRadius = nightmare ? 48 : 34;
+  const playerIsLoud = micReady && micLevel > thresh;
+
+  if(playerIsLoud && dist < hearRadius){
+    if(heardCooldown <= 0){ timesHeard++; heardCooldown = 4.0; }
+    const huntSpeed = (nightmare ? 6.4 : 4.6) + pagesFound * 0.48;
+    const pull = head.clone().sub(slender.position); pull.y = 0; pull.normalize();
+    slender.position.addScaledVector(pull, huntSpeed * dt);
+    sanity -= (nightmare ? 14 : 9) * dt;
+    nextTpTimer = Math.min(nextTpTimer, 1.4);
   }
+
+  const playerIsHidden = !flashlightOn && !playerIsLoud && !lookingAtHim && dist > 6.5;
+  if(playerIsHidden){
+    stealthTimer += dt;
+    sanity = Math.min(100, sanity + 3.5 * dt);
+    if(stealthTimer > 4.5){ teleportSlender(false); stealthTimer = 0; nextTpTimer = rand(7, 12); }
+  } else stealthTimer = 0;
 
   nextTpTimer -= dt;
-  if(nextTpTimer <= 0 && !isHidden && pagesFound < chaseLimit){
-    const targetDist = Math.max(5.0, (20 - pagesFound*1.65) / diffMultiplier);
-    teleportSlender(targetDist);
-    nextTpTimer = rand(5.5, 10.5) / diffMultiplier;
+  if(nextTpTimer <= 0 && !lookingAtHim && !playerIsHidden){
+    teleportSlender(pagesFound >= 2 || nightmare);
+    nextTpTimer = Math.max(2.0, (9.0 - pagesFound * .75) / diffMultiplier);
   }
 
   slender.lookAt(head.x, 0, head.z);
-  for(let idx=0; idx<tentacles.length; idx++){
-    tentacles[idx].rotation.z = (idx%2===0?1:-1)*(.4 + idx*.1) + Math.sin(t*(4+pagesFound) + idx)*.16;
+  tentacles.forEach((tn,i)=>{ tn.rotation.z = (i%2===0?1:-1)*(.4 + i*.12) + Math.sin(t*7 + i)*.26; });
+
+  if(!lookingAtHim && !playerIsLoud && !playerIsHidden && dist > 3.0){
+    const chase = ((nightmare ? 1.45 : .85) + pagesFound * .40) * diffMultiplier;
+    const dir = head.clone().sub(slender.position); dir.y=0; dir.normalize();
+    slender.position.addScaledVector(dir, chase * dt);
   }
 
-  let speedFactor = 1.0;
-  if(isHidden) speedFactor = 0.25;
-  else if(makingNoise) speedFactor = nightmare ? 2.25 : 1.95;
-
-  const stalkSpeed = (0.65 + pagesFound * 0.34) * diffMultiplier * speedFactor;
-  if(dist > 1.2){
-    slender.position.x += (dx/dist) * stalkSpeed * dt;
-    slender.position.z += (dz/dist) * stalkSpeed * dt;
-  }
-
-  const toSlender = toSlenderVector.set(dx,0,dz).normalize();
-  const lookingAtHim = fwd.dot(toSlender) > 0.72 && dist < (15 + pagesFound) && flashlightOn;
-  if(!firstEncounterShown && elapsedRound > 10 && ((lookingAtHim && dist < 20) || dist < 8.5)){
-    showFirstEncounter();
-  }
-  if(firstEncounterTimer > 0){
-    firstEncounterTimer = Math.max(0, firstEncounterTimer - dt);
-    if(firstEncounterTimer <= 0) hideFirstEncounter();
-  }
-
-  let staticLevel = 0;
-  const dangerRadius = isHidden ? 4.5 : (9.5 + pagesFound * 0.8 + (nightmare ? 2.5 : 0));
-  if(dist < dangerRadius || lookingAtHim || (makingNoise && dist < 22)){
-    staticLevel = Math.min(1, (dangerRadius + 2 - dist)/dangerRadius + (lookingAtHim ? 0.35 + pagesFound*0.04 : 0) + (makingNoise ? 0.3 : 0));
-    sanity -= (11 + pagesFound*3.8) * diffMultiplier * staticLevel * dt;
-    if(Math.random() < (0.008 + pagesFound*0.003 + (nightmare ? 0.008 : 0)) && flashFailTimer <= 0){
-      flashFailTimer = 0.55;
-      sfx('spark');
-    }
-  } else {
-    const regen = nightmare ? 0.8 : Math.max(1.5, 4.5 - pagesFound*0.3);
-    sanity = Math.min(100, sanity + regen * dt);
-  }
-
-  updateVhsEffect(staticLevel);
-
-  const phantomSanityLimit = nightmare ? 70 : 35;
-  const phantomAllowed = sanity < phantomSanityLimit || ambientApparitionTimer > 0 || phantomSlender.visible;
-  if(phantomAllowed){
-    phantomTimer -= dt;
-    if(phantomTimer <= 0 && !phantomSlender.visible && sanity < phantomSanityLimit){
-      const ang = rand(-0.6, 0.6);
-      const dir = phantomDirection.copy(fwd).applyAxisAngle(UP, ang);
-      phantomSlender.position.set(head.x + dir.x * rand(6, 10), 0, head.z + dir.z * rand(6, 10));
-      phantomSlender.lookAt(head.x, 0, head.z);
-      phantomSlender.visible = true;
-      phantomTimer = 1.4;
-    } else if(phantomSlender.visible){
-      const toPhantom = phantomDirection.copy(phantomSlender.position).sub(head).normalize();
-      if(phantomTimer <= 0 || (flashlightOn && fwd.dot(toPhantom) > 0.92)){
-        phantomSlender.visible = false;
-        phantomTimer = nightmare ? rand(2.5, 5.0) : rand(4, 8);
-      }
-    }
-  } else {
-    phantomSlender.visible = false;
+  const dangerRadius = (flashlightOn ? 18 : 11) + pagesFound * 1.1;
+  if((lookingAtHim && dist < dangerRadius) || dist < 4.5){
+    const drain = (lookingAtHim ? 24 : 15) * (flashlightOn ? 1.15 : 0.65) * diffMultiplier;
+    sanity -= drain * dt;
+    if(Math.random() < (nightmare ? 0.05 : 0.025)) flashFailTimer = 0.25;
+  } else if(!playerIsHidden) {
+    sanity = Math.min(100, sanity + (4.5 / diffMultiplier) * dt);
   }
 
   if((dist < 2.2 || (lookingAtHim && dist < (nightmare ? 5.5 : 4.6))) && screamerTimer <= 0){
@@ -3235,132 +2788,200 @@ function updateSlender(dt, t){
     nextTpTimer = 1.8;
   }
 
-  const sanityStatic = Math.max(0, (50 - sanity) / 90);
-  const combinedStatic = Math.max(staticLevel, sanityStatic);
+  if(dist < 1.65){ triggerDeathScreamer('TE ATRAPÓ EN LA OSCURIDAD'); return; }
+  if(sanity <= 0){ triggerDeathScreamer('TU MENTE COLAPSÓ'); return; }
 
+  const staticLevel = Math.max(0, (100 - sanity) / 100);
   if(screamerTimer > 0){
-    screamerTimer -= dt;
-    updateScreamerPlane(dt, 1, true);
-  } else if(combinedStatic > 0.05){
-    updateScreamerPlane(dt, combinedStatic, false);
-  } else {
-    screamMat.opacity = 0;
-  }
+    updateScreamerPlane(dt, 1.0, true);
+    ctrls.forEach(c=>pulse(c, .95, 35));
+  } else if(staticLevel > 0.04){
+    updateScreamerPlane(dt, staticLevel, false);
+  } else screamMat.opacity = 0;
 
-  if(sanity <= 0){
-    sfx('lose');
-    updateScreamerPlane(dt, 1, true);
-    drawPanel('TE ATRAPO...');
-    finishGame(false, 'SLENDERMAN TE ATRAPÓ');
+  const hallucinationChance = nightmare ? 0.008 : 0.003;
+  if(sanity < 55 && phantomTimer <= 0 && Math.random() < hallucinationChance){
+    phantomTimer = 1.35;
+    const pAng = Math.atan2(look.z, look.x) + rand(-0.6, 0.6);
+    phantomSlender.position.set(head.x + Math.cos(pAng)*8, 0, head.z + Math.sin(pAng)*8);
+    phantomSlender.lookAt(head.x, 0, head.z);
+    phantomSlender.visible = true;
+    sfx('click');
   }
 }
 
-/* ================= Bucle principal ================= */
-const clock = new THREE.Clock();
-let panelRefreshTimer = 0;
-let micRefreshTimer = 0;
-renderer.setAnimationLoop(()=>{
-  const dt = Math.min(clock.getDelta(),.05), t = clock.elapsedTime;
-  if(!paused){
-    micRefreshTimer -= dt;
-    if(micRefreshTimer <= 0){
-      updateMicrophone();
-      micRefreshTimer = 0.06;
-    }
+/* ================= Bucle Principal ================= */
+let last = performance.now(), acc = 0, hudTimer = 0;
+
+function updateVRPrompt(){
+  if((!renderer.xr.isPresenting && !mobileVrActive) || !playing || paused || pendingDefeatReason){
+    vrPromptSprite.visible = false;
+    return;
   }
-  updateControllerButtons();
+  camera.getWorldPosition(head);
+  let targetPos = null, minDist = 3.0;
+  for(let i=0; i<pages.length; i++){
+    const d = pages[i].m.position.distanceTo(head);
+    if(d < minDist){ minDist = d; targetPos = pages[i].m.position; }
+  }
+  for(let i=0; i<batteries.length; i++){
+    const d = batteries[i].m.position.distanceTo(head);
+    if(d < 2.8 && d < minDist){ minDist = d; targetPos = batteries[i].m.position; }
+  }
+  if(targetPos){
+    vrPromptSprite.visible = true;
+    vrPromptSprite.position.set(targetPos.x, targetPos.y + 0.36, targetPos.z);
+  } else vrPromptSprite.visible = false;
+}
+
+renderer.setAnimationLoop((now)=>{
+  const rawDt = Math.min(.05, (now - last)/1000);
+  last = now;
+  acc += rawDt;
+  if(acc < 1/30) return;
+  const dt = acc; acc = 0;
+  const t = now * .001;
+
+  handleXRButtons();
   updateParticles(t, dt);
   updateRain(dt);
   updateBats(t, dt);
   updateFootprints(dt);
-  move(dt);
-  updateItems(t);
 
-  altarOrb.rotation.y = t * 1.5;
-  altarOrb.position.y = 1.35 + Math.sin(t * 2.5) * 0.08;
-  radioLed.visible = Math.sin(t * 14) > 0;
+  if(firstEncounterTimer > 0){
+    firstEncounterTimer -= dt;
+    if(firstEncounterTimer <= 0) hideFirstEncounter();
+  }
+  if(ambientGlitchTimer > 0) ambientGlitchTimer = Math.max(0, ambientGlitchTimer - dt);
+  if(ambientApparitionTimer > 0){
+    ambientApparitionTimer = Math.max(0, ambientApparitionTimer - dt);
+    if(ambientApparitionTimer === 0 && phantomTimer <= 0) phantomSlender.visible = false;
+  }
 
-  if(playing && !paused){
-    updateSlender(dt, t);
-    timeLeft -= dt;
-
-    if(flashlightOn){
-      const drain = isNightmare() ? 0.90 : 0.55;
-      battery = Math.max(0, battery - drain * dt);
-      if(battery <= 0){
-        flashlightOn = false;
-        sfx('click');
+  if(playing && !paused && !pendingDefeatReason){
+    forestEventTimer -= dt;
+    if(forestEventTimer <= 0){
+      forestEventTimer = rand(18, 28) / diffMultiplier;
+      const roll = Math.random();
+      if(roll < 0.36) sfx('branchSnap');
+      else if(roll < 0.68) sfx('crowCall');
+      else {
+        ambientGlitchTimer = Math.max(ambientGlitchTimer, 0.95);
+        sfx('signal');
+        if(phantomTimer <= 0){
+          camera.getWorldPosition(head);
+          camera.getWorldDirection(look); look.y = 0; look.normalize();
+          const pAng = Math.atan2(look.z, look.x) + (Math.random() > 0.5 ? 0.52 : -0.52);
+          phantomSlender.position.set(head.x + Math.cos(pAng)*12, 0, head.z + Math.sin(pAng)*12);
+          phantomSlender.lookAt(head.x, 0, head.z);
+          phantomSlender.visible = true;
+          ambientApparitionTimer = 0.85;
+        }
       }
     }
-
-    panelRefreshTimer -= dt;
-    if(panelRefreshTimer <= 0){
-      drawPanel();
-      updatePageSignalUI();
-      panelRefreshTimer = 0.16;
-    }
-    if(timeLeft<=0){
-      sfx('lose'); drawPanel('FIN DEL TIEMPO');
-      finishGame(false, 'SE AGOTÓ EL TIEMPO');
-    }
-  } else if(!playing){
-    dolly.rotation.y += dt * 0.15;
   }
 
   lightningTimer -= dt;
   if(lightningTimer <= 0){
-    lightningFlash = 0.25;
-    lightningTimer = isNightmare() ? rand(5, 11) : rand(9, 18);
-    if(playing) sfx('thunder');
+    lightningTimer = rand(14, 24);
+    lightningFlash = 0.48;
+    if(playing && !paused) sfx('thunder');
   }
   if(lightningFlash > 0){
     lightningFlash -= dt;
-    lightningLight.intensity = Math.random() > 0.3 ? 3.5 : 0.2;
-    scene.fog.color.setHex(isNightmare() ? 0x26080c : 0x161826);
+    const flashOn = Math.random() > 0.28;
+    lightningLight.intensity = flashOn ? 14.0 : 0.5;
+    hemi.intensity = flashOn ? 1.45 : 0.12;
+    scene.fog.color.setHex(flashOn ? (isNightmare() ? 0x6b1420 : 0x5c6d8a) : 0x020103);
+    skyMat.color.setHex(flashOn ? 0xffffff : 0xaaaaaa);
   } else {
     lightningLight.intensity = 0;
+    hemi.intensity = 0.07;
     scene.fog.color.setHex(isNightmare() ? 0x080102 : 0x020103);
+    skyMat.color.setHex(0xffffff);
   }
 
-  let lightActive = flashlightOn && battery > 0;
-  if(lightActive && battery < (isNightmare() ? 30 : 15) && Math.random() < 0.09){
-    lightActive = false;
-  }
-  if(flashFailTimer > 0){
-    flashFailTimer -= dt;
-    lightActive = Math.random() > 0.65;
+  if(phantomTimer > 0){
+    phantomTimer -= dt;
+    if(phantomTimer <= 0 && ambientApparitionTimer <= 0) phantomSlender.visible = false;
   }
 
-  if(flashBuzzGain && ac){
-    flashBuzzGain.gain.setTargetAtTime((playing && lightActive) ? 0.015 : 0, ac.currentTime, 0.05);
+  altarOrb.rotation.y = t * 1.8;
+  altarOrb.position.y = 1.35 + Math.sin(t * 2.5) * 0.08;
+  radioLed.visible = Math.sin(t * 9) > 0;
+
+  for(let i=0; i<batteries.length; i++){
+    const b = batteries[i];
+    b.m.rotation.y = t * 2.2 + b.phase;
+    b.m.position.y = 0.25 + Math.sin(t * 3.5 + b.phase) * 0.04;
   }
 
-  if(lightActive){
-    const dimFactor = battery < 25 ? 0.55 : 1.0;
-    flashlight.intensity = (52 * dimFactor) + Math.sin(t*35)*2 + (screamerTimer>0 ? rand(-35,35) : 0);
-    beamMesh.visible = true;
-    lensMat.color.setHex(0xfff6cc);
+  if(playing && !paused && !pendingDefeatReason){
+    timeLeft -= dt;
+    if(timeLeft <= 0){
+      timeLeft = 0;
+      triggerDeathScreamer('SE ACABÓ EL TIEMPO');
+    } else {
+      updateMicrophone();
+      updateMove(dt);
+      updateSlender(dt, t);
+      updateVRPrompt();
+      if(sanity <= 0 && !pendingDefeatReason) triggerDeathScreamer('TE ENCONTRÓ EN LA OSCURIDAD');
+    }
   } else {
-    flashlight.intensity = 0;
-    beamMesh.visible = false;
-    lensMat.color.setHex(0x222228);
+    vrPromptSprite.visible = false;
+    if(!playing) updateMicrophone();
   }
 
-  if(playing && (keys.w || keys.s || keys.a || keys.d)){
-    const bobSpeed = (keys.shift || vrSprintPressed) ? 17 : 12;
-    flashRig.position.y = -0.22 + Math.sin(t*bobSpeed)*0.012;
+  if(screamerTimer > 0){
+    screamerTimer -= dt;
+    updateScreamerPlane(dt, 1.0, true);
+    if(screamerTimer <= 0){
+      screamMat.opacity = 0;
+      if(pendingDefeatReason){
+        const reason = pendingDefeatReason;
+        pendingDefeatReason = null;
+        finishGame(false, reason);
+      }
+    }
   }
+
+  if(playing && !paused && !pendingDefeatReason && flashlightOn && battery > 0){
+    battery = Math.max(0, battery - (isNightmare() ? 0.65 : 0.45) * dt);
+    if(battery === 0){ flashlightOn = false; sfx('click'); }
+  }
+
+  if(flashFailTimer > 0) flashFailTimer -= dt;
+  const activeLight = flashlightOn && battery > 0 && flashFailTimer <= 0;
+  const lowBatFlicker = (battery < 18 && Math.random() < 0.12) ? 0.25 : 1.0;
+
+  flashlight.intensity = activeLight ? 52 * lowBatFlicker : 0;
+  beamMesh.visible = activeLight && lowBatFlicker > 0.5;
+  lensMat.color.setHex(activeLight ? 0xfff6cc : 0x1a1a22);
+  if(flashBuzzGain && ac) flashBuzzGain.gain.setTargetAtTime(activeLight ? 0.015 : 0, ac.currentTime, 0.05);
+
+  if(playing && !paused){
+    hudTimer += dt;
+    if(hudTimer >= .22){
+      hudTimer = 0;
+      drawPanel();
+      updatePageSignalUI();
+    }
+  }
+
+  const staticLevel = Math.max(0, (100 - sanity) / 100);
+  updateVhsEffect(screamerTimer > 0 ? 1 : staticLevel);
 
   camera.getWorldPosition(head);
   for(let i=0; i<shadowEyes.length; i++){
     const e = shadowEyes[i];
-    e.lookAt(head.x, e.position.y, head.z);
-    if(e.position.distanceToSquared(head) < 49){
-      const a = rand(0, Math.PI * 2);
-      const r = rand((pagesFound >= 6 || isNightmare()) ? 8 : 14, MAP_R - 4);
-      e.position.set(Math.cos(a) * r, rand(1.1, 2.2), Math.sin(a) * r);
-    }
+    e.lookAt(head);
+    e.visible = Math.sin(t*2.5 + i) > -.2;
   }
 
-  renderer.render(scene,camera);
+  if(mobileVrActive && stereoEffect && !renderer.xr.isPresenting){
+    stereoEffect.render(scene, camera);
+  } else {
+    renderer.render(scene, camera);
+  }
 });
